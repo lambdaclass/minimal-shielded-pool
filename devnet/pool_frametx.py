@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Build and submit the minimal pool's EIP-8141 FrameTxs on ethrex.
+"""Build and submit the minimal pool's ethrex v23 Hegotá FrameTxs.
+
+This tool targets the EIP-8141/8250/8272 dialect deployed on chain 8141, not
+the newer EIP-8141 draft wire format.
 
 Spends use one exact grammar:
 
@@ -340,7 +343,7 @@ def main():
     if "--root-slot" in sys.argv:
         i = sys.argv.index("--root-slot")
         if i + 1 >= len(sys.argv):
-            raise SystemExit("--root-slot requires the block number that published the root")
+            raise SystemExit("--root-slot requires the consensus slot that published the root")
         root_slot_override = int(sys.argv[i + 1], 0)
     if "--settle-gas" in sys.argv:
         i = sys.argv.index("--settle-gas")

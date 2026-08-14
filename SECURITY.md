@@ -13,6 +13,11 @@ rejection, exact two-frame self-payment, and EIP-7843 slot handling. Production
 activation remains blocked on a real ceremony, independent audit, cross-client
 evidence, and fork-specific gas proof.
 
+The active transaction encoder and dispatcher target the ethrex v23 Hegotá
+testnet profile. They do not implement the newer EIP-8141 draft wire format,
+which has nested fees and separate execution and state gas limits. A client
+upgrade to that format requires a new immutable pool profile and deployment.
+
 ## Security model
 
 The pool holds native ETH. Notes, fees, withdrawals, and payer costs are all
@@ -61,14 +66,23 @@ dispatcher, logic, and both Poseidon runtimes before the pool is used.
   Keccak collision resistance, and secp256k1 unforgeability.
 - A production multi-party phase-2 ceremony with destroyed contributions and
   independent transcript verification.
-- Correct EIP-8141, EIP-8250, EIP-8272, EIP-7843, and EIP-8369 client
-  implementations.
+- Correct ethrex v23 implementations of the Hegotá EIP-8141, EIP-8250,
+  EIP-8272, and EIP-7843 profile.
 - An explicitly supported verification budget of at least 322,800 gas. The
   published EIP-8141 public-mempool value is 100,000 and is insufficient.
 - A fork-scoped proof that 2,000,000 SENDER gas covers all cold-state,
   rollover, credit, proxy, and static-call paths. Unsupported repricing forks
   require a new immutable profile.
 - Independent circuit, Solidity, Yul, wallet, and deployment review.
+
+EIP-8369 remains an open Informational proposal. Its current `2^20` per-IL
+budget is provisional and does not activate or guarantee a per-transaction
+limit. Hegotá's configured Profile 2 behavior is testnet evidence only.
+
+The proving compiler and snark tooling remain pinned to the committed artifact
+provenance. Transitive packages are overridden to patched versions where this
+does not change circuit outputs. A direct compiler upgrade requires a new
+artifact set, ceremony, activation manifest, and circuit review.
 
 The wallet is a fixture generator, not a production keystore. Random note
 secrets and one-time authorizer keys are not durably backed up.

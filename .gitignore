@@ -6,6 +6,6 @@ venv/
 build/
 wallet/artifacts/
 
-# the Yul pool initcode artifact is read by the forge suites; keep it tracked
+# the immutable dispatcher initcode is read by the forge suites; keep it tracked
 !devnet/build/
-!devnet/build/shielded_pool_init.hex
+!devnet/build/shielded_pool_dispatcher_init.hex

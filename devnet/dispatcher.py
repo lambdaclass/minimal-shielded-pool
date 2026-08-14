@@ -18,9 +18,9 @@ Usage:
                                       Rerun after any ShieldedPoolDispatcher.yul
                                       change.
 
-There is deliberately NO --runtime mode: as with yul_pool.py, the optimizer
-appends a data segment after the runtime subobject, so the naive 0xfe-split is
-unsound. Derive the expected deployed code by simulating the deployment:
+There is deliberately no --runtime mode. The optimizer appends a data segment
+after the runtime subobject, so the naive 0xfe split is unsound. Derive the
+expected deployed code by simulating the deployment:
 
   cast call --rpc-url <rpc> --create "$(dispatcher.py --initcode 0x<impl>)"
 

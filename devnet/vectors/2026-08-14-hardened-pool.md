@@ -1,5 +1,8 @@
 # Hardened minimal pool live run
 
+> Historical 400k/10M deployment. The active testnet profile and deployment
+> are recorded in [the tight gas profile](2026-08-14-tight-gas-profile.md).
+
 This is disposable testnet evidence, not a production deployment. The proving
 key is the repository's single-party testbed key.
 

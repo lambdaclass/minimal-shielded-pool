@@ -682,10 +682,10 @@ pool to route the fee to the payer (a payer `TXPARAM`, not currently exposed).
 
 ### Conservative v2 validated live, and two findings (2026-07-11)
 
-The v2 statement (domain-separated nullifiers, in-circuit `nf1 != nf2`, pull-credit
-settlement, envelope-bound fee recipient, reproducible paymaster; see
-[[drafts/minimal-shielded-pool-v2/statement]]) ran end to end on a fresh public-devnet
-stack (chain 3151908, blocks 134171-134180) with a throwaway operator. The whole
+The archived v2 statement (domain-separated nullifiers, in-circuit `nf1 != nf2`,
+pull-credit settlement, envelope-bound fee recipient, and reproducible paymaster)
+ran end to end on a fresh public-devnet stack (chain 3151908, blocks
+134171-134180) with a throwaway operator. The whole
 point was to exercise the new SENDER-frame binding live for the first time: the
 paymaster now also binds the pay-frame and SENDER-frame shape with `FRAMEPARAM`
 (0xb3) and `FRAMEDATALOAD` (0xb1), which no prior run touched. It works. The honest
@@ -801,7 +801,8 @@ have to treat one-time keys on their own terms.
    validation state: keyed nonces (done, via `NONCEKEYLOAD`) and the recent
    root (via `RECENTROOTREFLOAD`). The pool's own NonceManager/RecentRoots sit
    at keccak-derived slots outside the surface; the faithful mapping replaces
-   them. See [[drafts/focil-eligibility/eip-draft]].
+   them. The current proposal is
+   [EIP-8369](https://github.com/ethereum/EIPs/pull/12110).
 5. **Index-based omission check.** FOCIL's stock end-of-block rule cannot
    express keyed-nonce validity. The fit is the builder-claimed-index approach:
    the builder names the insertion index, attesters reconstruct state there

@@ -1,5 +1,5 @@
 /// @title ShieldedPoolDispatcher
-/// @notice Immutable EIP-8141 validation shell for the minimal shielded pool.
+/// @notice Immutable ethrex v23 Hegotá validation shell for the minimal pool.
 /// Runtime tail: implementation address || Groth16 verifier address.
 object "ShieldedPoolDispatcher" {
     code {

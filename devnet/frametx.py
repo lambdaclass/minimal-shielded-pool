@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Current-format EIP-8141/8250/8272/7906 frame-transaction (type 0x06) encoder.
+"""Ethrex v23 Hegotá FrameTx (type 0x06) encoder.
+
+This is the exact EIP-8141/8250/8272 testnet dialect deployed on chain 8141.
+It is not the newer EIP-8141 draft wire format, which uses nested fees and
+separate execution and state gas limits.
 
 Wire layout (ethrex hegota-devnet), verified against the repo golden vector:
   raw = 0x06 || rlp([chain_id, nonce_keys, nonce_seq, sender, frames, signatures,

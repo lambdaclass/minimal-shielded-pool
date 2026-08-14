@@ -11,15 +11,16 @@
 # ceremony file) and runs a multi-party phase 2. Set PTAU=/path/to/final.ptau
 # to use an externally sourced phase-1 file.
 #
-# Outputs (build/ is gitignored except the two committed artifacts):
+# Outputs (build/ is gitignored, but these three generated artifacts are tracked):
 #   build/spend.r1cs, build/spend_js/spend.wasm   circuit
 #   build/spend_final.zkey                        proving key (~8 MB)
 #   ../contracts/src/Groth16Verifier.sol          committed, snarkjs-generated
 #   ../contracts/vectors/spend_vkey.json          committed verification key
 #
-# The committed verifier and any committed proof fixtures are mutually
-# consistent; re-running this script re-randomises the ceremony, so it also
-# regenerates every proof fixture consumer (run ../wallet/gen_smoke.py after).
+# The committed verifier and proof fixtures are mutually consistent.
+# Re-running this script re-randomises phase 2 and replaces the proving key,
+# verification key, and verifier. Run ../wallet/gen_smoke.py afterwards, then
+# update activation_manifest.testbed.json before treating the result as usable.
 set -euo pipefail
 cd "$(dirname "$0")"
 

@@ -32,8 +32,10 @@ def main():
     required = profile["verify_frame_gas"] + profile["signature_gas"]
     if required != profile["required_verify_budget"]:
         raise SystemExit("required verify budget is inconsistent")
-    if required > profile["eip_8369_profile_2_budget"]:
-        raise SystemExit("transaction exceeds the EIP-8369 Profile 2 budget")
+    if profile["wire_profile"] != "ethrex-v23-hegota-testnet":
+        raise SystemExit("unsupported transaction wire profile")
+    if required > profile["hegota_profile_2_budget"]:
+        raise SystemExit("transaction exceeds the configured Hegota Profile 2 budget")
     if profile["max_observed_verify_gas"] >= profile["verify_frame_gas"]:
         raise SystemExit("VERIFY frame does not cover the observed valid path")
     if profile["settle_frame_gas"] != 2_000_000:

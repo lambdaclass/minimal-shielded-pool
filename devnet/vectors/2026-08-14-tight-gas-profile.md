@@ -18,7 +18,7 @@ The immutable spend profile is reduced from 400,000 to 320,000 VERIFY gas and fr
 | VERIFY execution | 400,000 | 320,000 | 294,401 live maximum | 25,599 |
 | SENDER settlement | 10,000,000 | 2,000,000 | 1,721,526 conservative bound | 278,474 |
 
-The one secp256k1 signature adds 2,800 gas to the validation prefix, so the declared EIP-8369 verification budget is 322,800 gas.
+The one secp256k1 signature adds 2,800 gas to the validation prefix, so the declared Hegotá Profile 2 verification budget is 322,800 gas. EIP-8369 remains an open Informational proposal and does not finalize this testnet parameter.
 
 ## Settlement bound
 
@@ -48,7 +48,7 @@ One root-publication block was shallow-reorged and re-included one consensus slo
 ## Reproduce
 
 ```sh
-cd prototypes/minimal-shielded-pool/contracts
+cd contracts
 forge test -vvvv --match-test test_two_million_gas_covers_heaviest_reachable_settlement_shape
 
 cd ../tooling
@@ -57,5 +57,5 @@ python3 check_gas_profile.py
 
 ## See also
 
-- [[prototypes/minimal-shielded-pool/index]]
-- [[prototypes/minimal-shielded-pool/devnet/vectors/2026-08-14-hardened-pool]]
+- [Repository overview](../../README.md)
+- [Initial hardened-pool run](2026-08-14-hardened-pool.md)

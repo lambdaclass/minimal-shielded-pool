@@ -1,12 +1,17 @@
 {
- "name": "bn254-shielded-pool-tooling",
- "private": true,
- "description": "Pinned proving toolchain for the BN254 edition (circom2 wasm compiler + snarkjs + circomlib)",
- "license": "Apache-2.0",
- "dependencies": {
-  "circom2": "0.2.8",
-  "circomlib": "2.0.5",
-  "circomlibjs": "0.1.7",
-  "snarkjs": "0.7.5"
- }
+  "name": "bn254-shielded-pool-tooling",
+  "private": true,
+  "description": "Pinned proving toolchain for the BN254 edition (circom2 wasm compiler + snarkjs + circomlib)",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "circom2": "0.2.8",
+    "circomlib": "2.0.5",
+    "circomlibjs": "0.1.7",
+    "snarkjs": "0.7.5"
+  },
+  "overrides": {
+    "brace-expansion": "2.1.4",
+    "underscore": "1.13.8",
+    "ws": "8.21.3"
+  }
 }

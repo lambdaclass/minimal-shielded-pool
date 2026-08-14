@@ -54,10 +54,10 @@ The earlier concurrent run through one public RPC proved that ethrex's local poo
 | Profile 2 classification | Source-level gates pass; live Engine replay unavailable | The live no-blob `self_verify` spend is a 352,800-gas candidate. Exact-revision tests accepted the eligible shape and excused omission for blob, extra-VERIFY, over-budget, and out-of-surface cases. |
 | Public gossip versus direct includer | Gossip pass, direct unavailable | A transaction sent to `rpc1` appeared pending on independent `rpc2` and `rpc3` before mining. Public endpoints expose no Engine or direct-includer method. |
 
-Exact transactions and limitations are recorded in
-[[prototypes/minimal-shielded-pool/devnet/vectors/2026-08-07-overlap-index-revert/README]]
-and
-[[prototypes/minimal-shielded-pool/devnet/vectors/2026-08-07-root-profile2-gossip/README]].
+Exact transactions and limitations are recorded in the
+[overlap/index/revert](vectors/2026-08-07-overlap-index-revert/README.md) and
+[root/Profile 2/gossip](vectors/2026-08-07-root-profile2-gossip/README.md)
+reports.
 
 ## Minimum next run
 
@@ -65,9 +65,8 @@ Implement and test the claimed-index data path next: commit the builder's index,
 
 ## See also
 
-- [[prototypes/minimal-shielded-pool/index]]
-- [[prototypes/minimal-shielded-pool/devnet/vectors/2026-08-07-concurrent-private/README]]
-- [[prototypes/minimal-shielded-pool/devnet/vectors/2026-08-07-overlap-index-revert/README]]
-- [[prototypes/minimal-shielded-pool/devnet/vectors/2026-08-07-root-profile2-gossip/README]]
-- [[research/focil/FOCIL and Native AA]]
-- [[drafts/focil-eligibility/eip-draft]]
+- [Repository overview](../README.md)
+- [Concurrent private transactions](vectors/2026-08-07-concurrent-private/README.md)
+- [Overlap, claimed index, and revert](vectors/2026-08-07-overlap-index-revert/README.md)
+- [Recent roots, Profile 2, and gossip](vectors/2026-08-07-root-profile2-gossip/README.md)
+- [EIP-8369 pull request](https://github.com/ethereum/EIPs/pull/12110)
