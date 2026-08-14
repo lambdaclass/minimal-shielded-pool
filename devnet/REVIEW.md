@@ -1,5 +1,9 @@
 # Hegotá devnet: review + shielded-pool integration
 
+> Historical engineering log. Architectures and commands below predate the
+> hardened 2026-08-14 pool and are not current deployment guidance. Use
+> `../README.md` and `vectors/2026-08-14-tight-gas-profile.md` for the active shape.
+
 A review of lambdaclass/ethrex's `hegota-devnet` (EIP-8141 frame transactions +
 EIP-8250 keyed nonces + EIP-8272 recent roots, plus EIP-7906 POST_TX) and the
 plan and tooling to run the BN254 shielded pool on it as a frame-native
@@ -258,7 +262,7 @@ exactly the draft's separation: public mempool admission and FOCIL
 eligibility are different policies, and this transaction reaches includers
 through a custom mempool or direct submission. The measured verification work
 is ~23% of the FOCIL draft's verify budget (the earlier Poseidon-compressed
-claim design measured ~62%; binding the eight publics directly in the verifier
+claim design measured ~62%; binding the nine publics directly in the verifier
 removed all Poseidon hashing from VERIFY). The FOCIL draft charges static
 declared prefix gas, not gas used, so the current 20k self-verify plus 300k pay
 frame is budgeted closer to 320k plus signature cost. Tightening declared frame
@@ -290,7 +294,7 @@ tested (contracts/test/ShieldedPool.t.sol):
 
 - `ShieldedPool.verifySpend(Spend) view` is the whole spend validity check
   (non-zero nullifiers, EIP-8272 recent-root binding, and the Groth16 proof
-  over the eight public signals, bound directly), and nothing else. It is
+  over the nine public signals, bound directly), and nothing else. It is
   `view`, so it runs under `STATICCALL`, which is what a VERIFY frame is: a
   paymaster targets it, staticcalls `verifySpend`, and `APPROVE`s payment if
   it returns. A test asserts it succeeds under a raw `staticcall` (proving no
@@ -334,8 +338,8 @@ per operation, VERIFY frame (the proof check) vs exec frame (state changes):
 | withdraw | ~243k               | ~957k  | ~1.20M |
 
 VERIFY is `verifySpend` plus `checkKeySet` (~3k): the Groth16 pairing check
-plus one scalar mul per public signal (eight signals, ~6.2k each) and the
-recent-root staticcall. There is no Poseidon hashing in VERIFY: the eight
+plus one scalar mul per public signal (nine signals, ~6.2k each) and the
+recent-root staticcall. There is no Poseidon hashing in VERIFY: the nine
 publics are bound directly by the verifier rather than compressed into a
 claim the contract recomputes, which cut this column from ~648k. It sits at
 ~23% of the FOCIL draft's `MAX_VERIFY_GAS_PER_TX = 2^20` (~1.05M) as measured
@@ -1091,6 +1095,19 @@ muls (9 x 6k ecMul), and ~6k the verifier's own field checks and dispatch.
 Within this statement there are ~5k of total slack, so no implementation
 change moves the number. The two real levers both change the statement or
 the architecture, and are documented rather than taken:
+
+The later native-ETH circuit keeps all nine public signals but exposes one
+simple implementation exception to that historical conclusion: transfer fixes
+both `publicAmount` and `ctx` to zero. An isolated verifier patch that skips
+the identity `ECMUL(0)` and `ECADD` terms reduced the measured Yul transfer
+proof from 247,159 to 234,350 gas, saving 12,809 gas without changing the
+circuit or statement. Its generic zero branches add 273 gas to the all-nonzero
+withdrawal path; separate entry points avoid that. On the next circuit
+regeneration, packing the two 126-bit amount fields into one 252-bit public
+field should save about another 6.3k on withdrawals. The
+current live self-paying path is about 286.4k including the 40k first-use
+charge for two keyed nonces, so a tightly tested 300k to 310k frame declaration
+is a more relevant target than treating the devnet's 500k cap as required.
 
 - **Compress the nine publics to one** via an in-circuit keccak of
   `[nf1, nf2, outCm1, outCm2, root, domain, publicAmount, fee, ctx]`. Drops
@@ -1879,7 +1896,268 @@ does. The normal `only_verify + pay` prefix supplies that ordering, but the VM
 must enforce it too.
 
 The running devnet adds resolved payer selector `TXPARAM(0x11)`, but that patch
-is not present in the public branch, whose selector table stops at `0x10`.
-Both live shapes prove the runtime behavior: it returns the pool for combined
-self-payment and the pay-frame target for sponsorship. Public source and tests
-remain necessary before treating that extension as closed.
+was not present in the public branch at `2d64fba`, whose selector table stops
+at `0x10`. Both live shapes prove the runtime behavior: it returns the pool for
+combined self-payment and the pay-frame target for sponsorship. Resolved the
+next day: see the 2026-07-16 section below.
+
+## Live revalidation and payer-TXPARAM reconciliation (2026-07-16)
+
+A full independent re-run confirmed the repository state end to end. Locally,
+the generated Yul artifacts are current, all Python tooling compiles and its
+self-tests pass, formatting and warning-denying lint are clean, and all 126
+Forge tests pass. A focused re-review of the fee-routing change confirmed the
+resolved-payer word is validated identically in all three settlements (zero and
+dirty-high-bits words rejected), the fee's only sinks are pool balance for
+`payer == pool` and `feeCredit[payer]` otherwise, and the
+`fee >= TXPARAM(0x06)` guard sits before combined approval in both frame-0
+implementations (`ShieldedPool.yul` and `ShieldedPoolDispatcher.yul:285`). The
+one named trust assumption is protocol-side: settlement believes ethrex sets
+`TXPARAM(0x11)` to exactly the account the payment approval debited.
+
+The live run deployed a fresh probe, logic, and dispatcher as pool
+`0xf6f36f01…` (verifier and Poseidon libraries reused; the verifier's onchain
+runtime is byte-equal to the current build) from a disposable key funded by a
+genesis account. The default two-frame self-paying lifecycle then reproduced
+the July 15 result on the public RPC: shield `0x2e362a4a…` (block 203728,
+1,083,142 gas, identical to July 15), transfer `0xc6afbe6a…` (block 203732,
+1,385,462 gas), withdraw `0x927f8147…` (block 203735, 1,525,580 gas), both
+spends with exactly two frames, `sender == payer == pool`, submitted by a
+zero-balance outer signer. Spend gas differs from July 15 by under 70 gas
+(state-dimension variance). Accounting was exact: 0.55 ETH withdrawal credit,
+`feeCredit(pool) == 0`, final pool balance 997,088,957,979,622,706 wei, which
+is the 1 ETH shield minus exactly 2,911,042 gas of self-paid debits at the
+effective price. An ordinary claim (block 203747, 35,538 gas) paid the
+recipient and cleared the credit. Re-publishing either exact mined transaction
+was rejected at admission with keyed-nonce `expected 1, got 0`.
+
+The adversarial negatives ran against a second fresh dispatcher
+(`0x9cac467d…`, sharing the immutable logic and verifier) with a
+randomized-secret fixture: a flipped proof bit and a 5,000,000-gas down-gassed
+settlement frame each failed in the validation prefix (`validation prefix
+frame reverted`, no payer resolved, nothing consumed), and the same note then
+transferred validly (`0x84d2ed43…`, block 204246). Two tooling findings from
+the run: generating a second deterministic fixture against an already-used
+deployment reuses the fixed-seed dummy note, whose nullifier is an
+already-consumed keyed nonce (use `--random`, or a fresh deployment); and the
+recent-root self-check's diagnostic blamed slot derivation for what is usually
+a root mismatch from a non-empty tree, now fixed to name both causes.
+
+Source reconciliation: the public `hegota-devnet` tip is `881f48d`
+(2026-07-15), and commit `f5bfde5dc` ("Add a knob-gated resolved-payer
+frame-tx TXPARAM index (0x11)", 2026-07-14) publishes the payer selector with
+tests. The final ethrex feature ask from the July 11 source check is therefore
+closed in public source. The VOPS validation-reads allowance remains open: the
+public history shows `92954f85` ("Allow VOPS validation reads in VERIFY
+frames") reverted by `2d64fba`, so the pool's storage-free `verifyProofOnly`
+workaround remains load-bearing.
+
+Two follow-ups from the same day. First, the recent-root expiry was hit live:
+attempting the second pool's withdrawal after its reference aged past the
+8191-slot window was rejected at admission (`slot 204265 is outside the usable
+window at slot 213808`), and because the pool publishes roots only on insert
+and the randomized fixture keeps no change-note secrets, that note is now
+unspendable. This is the missing root-republish entrypoint demonstrated on
+chain, not just predicted. A follow-up shield of an already-inserted
+commitment was also correctly refused, by the contract's DuplicateCommitment
+guard in simulation, before broadcast. Second, Dora frame support exists but
+is not yet serving: `lambdaclass/dora` branch `frame-tx-view` renders type-0x06
+transactions on the transaction and slot pages (`558bed7d1`, over a
+go-ethereum frame-tx fork so the blocks decode), and its GHCR image published
+2026-07-16 19:19 UTC, but `dora.hegota.ethrex.xyz` still runs the pre-frames
+June 27 build (`git-0b10c78`): no frame type in its filter, the July frame
+transactions absent at already-indexed heights, and a freshly mined type-0x06
+shield (`0x8c6d1f33…`, block 213800) not found. Once the instance is switched,
+the historical frame transactions will still need a re-index to appear. The
+fork also carries an `eip7805-support` branch worth watching for the FOCIL
+milestone.
+
+## Root republish entrypoint (2026-07-16)
+
+The quiet-pool deadlock demonstrated in the morning's live run is closed. All
+three settlement implementations gained `republishRoot()`, a permissionless
+entrypoint that re-stamps the existing current root at the present consensus
+slot and emits `RootRepublished(bytes32 indexed root, uint64 slot)`. The
+caller cannot inject a root, only refresh the true one, and an overwritten
+ring position has already expired, so the function needs no authorization.
+The reference implementation and the dispatcher logic add the one-line
+external function; the monolithic Yul adds the `0x810a208e` selector case and
+event emitter; the dispatcher itself needs nothing because it delegates all
+nonempty calldata to the logic. Five new Forge tests cover the re-stamp
+without insert, event and predeploy-payload exactness, any-caller access, the
+reverting-predeploy path, and the delegatecall context through the proxy; the
+suite is now 131 tests, all passing, with `forge fmt` and warning-denying lint
+clean and the regenerated monolith artifact checked in.
+
+`pool_frametx.py` now also fails fast when a reference's publication slot has
+left the 8191-slot window, naming the remedy, instead of letting admission
+reject the transaction at broadcast. The EIP-8272 draft gained a Security
+Considerations paragraph: sources that write roots only on state change
+SHOULD expose a permissionless refresh, or their consumers inherit a liveness
+dependency on unrelated writes.
+
+Validated live the same day on a fresh deployment (pool `0x3490ce6f…`, logic
+`0xD45e547D…`): shield in block 217910, `republishRoot()` from an ordinary key
+in block 217913 (52,680 gas, correct event, unchanged root), and the two-frame
+self-paying transfer mined in block 217917 with its declared reference naming
+the republished slot 217913 rather than any insert's publication. A quiet pool
+is revived by anyone re-stamping its root, and a proof built against that root
+spends without regeneration. Vectors in `devnet/vectors/2026-07-16-republish/`.
+This supersedes the "no root-republish entrypoint" acknowledgement in the
+tooling hardening pass above.
+
+## Dora frames verified on Hegotá (2026-07-16, later the same day)
+
+The operators switched `dora.hegota.ethrex.xyz` to a frames build
+(`git-837c7cea`, not yet on the public branch) and frame rendering now works
+for every transaction shape this project produced. The July 9 three-frame
+faithful spend (`0xabcc9c82…`) renders with the two nullifiers as its keyed
+nonce set and the `only_verify`, `pay`, `SENDER` frame table. Today's
+self-paying transfer (`0xe60fb3f6…`) renders `From = the pool`, combined
+`VERIFY APPROVE execution+payment` then `SENDER` both targeting the pool, the
+keyed nonce set, and a dedicated recent-roots line showing the republished
+entry (slot 217934, root `0x01b6868a…`, the pool's source id), which makes the
+EIP-8272 reference a first-class explorer object.
+
+Five rendering gaps to report upstream, each re-verified after the deploy
+settled. Frame transactions render without their block and receipt join:
+block 0, epoch timestamp, gas used 0, and a red failure badge on transactions
+that succeeded. Every frame transaction shows a Created Contract line because
+the missing top-level `to` is treated as contract creation; the displayed
+address is exactly CREATE(from, 0), verified by recomputation, and the same
+misread appears as "Contract Creation" in the slot page's transaction listing.
+The overview value goes through a float64 wei-to-ETH conversion: both 0.1 ETH
+shields render as 0.100000000000000006 (the float64 representation of 0.1 at
+18 decimals) while the 1 ETH shield renders exactly, because 1.0 is exactly
+representable. The details Nonce field shows 0 regardless of the transaction's
+nonce_seq (a seq 9 shield shows Nonce 0 while the keyed-nonce line correctly
+says seq 9), so it is not wired to the type-6 payload. And the build predates
+the execution-transactions listing page, so `/transactions` is 404 and
+discovery is by hash only. On the positive side, the post-upgrade instance has
+healthy consensus indexing (slots proposed with proposers), and slot pages
+render frame transactions with an 8141 type badge and the method decoded from
+the SENDER frame's calldata.
+
+## Proof in the VERIFY frame, publics-only settlement (2026-07-17)
+
+The Groth16 proof no longer rides in the settlement tuple. The frame-0 VERIFY
+frame carries the 256-byte proof as its calldata, and the SENDER frame settles
+a publics-only 288-byte `Spend`. Settlement inputs are now exactly the state
+transition's public signals, so the proof is a detachable validation-surface
+unit: it composes with the EIP-8288 dependency-frame aggregation path and the
+EIP-8141 signatures-list carrier (both read proofs outside the signed
+settlement calldata) without a further ABI change. There is no statement or
+circuit change: same nine publics, same verification key, same proofs.
+
+Mechanics across the three implementations. The `Spend` struct drops
+`pA/pB/pC`; `transfer`/`withdraw` become `0x4ebb583c` / `0x5f0c5052` and
+`verifyProofOnly(Spend,uint256[2],uint256[2][2],uint256[2])` is `0x76314392`
+(byte-identical calldata to the old tuple: publics then proof). The dispatcher
+and monolith frame-0 code bind `frameParam(0, dataLen) == 256` and read the
+proof from their own calldata, verifying it against the settle frame's publics.
+The empty-calldata frame discriminator becomes `calldatasize() == 256` (no ABI
+call is 256 bytes, and the envelope opcodes exceptional-halt outside a frame
+transaction, so a stray 256-byte call reverts). `EnvelopeProbe.yul` gained a
+nonzero-calldata proof passthrough returning `[frame0 dataLen, 8 proof words]`;
+the standalone `ShieldedPool.sol` reference reads it to re-verify in settlement
+(it alone keeps the belt-and-suspenders re-check), while the dispatcher logic
+and monolith verify only in frame 0. The bounded paymaster binds the pay
+frame's publics byte-equal to the settle frame and its proof bytes byte-equal
+to frame 0.
+
+Validated: all 132 Forge tests pass (the differential corpus and cascade were
+updated for the new selectors and the reference's proof-passthrough arming),
+fmt and lint clean, artifacts regenerated. Live on a fresh split deployment
+(pool `0xdd93876a…`, logic `0x6a97CC25…`, probe `0xe6ecce2c…`): the two-frame
+self-paying transfer (block 225026) and withdrawal (block 225030) mined with
+frame 0 carrying 256 bytes and the SENDER frame 292, confirmed in Dora's frame
+view; gas within ~800 of the pre-split run; replay rejected at admission. On a
+fresh empty pool, a proof flipped in frame 0 and a down-gassed settle frame
+both failed in the validation prefix, and the unmodified spend then mined
+(block 225052). Vectors in `devnet/vectors/2026-07-17-proof-in-verify/`.
+
+One productionization note surfaced: `ShieldedPoolLogic` now deploys at
+~11.7M gas under EIP-8037 state-dimension accounting, close to the EIP-7825
+per-transaction cap of 2^24 = 16,777,216. A LeanIMT or logic split would give
+headroom; today it deploys but the margin is worth tracking.
+
+Dora update: `dora.hegota.ethrex.xyz` is now serving the frame-tx build. It
+renders the full frame view (per-frame mode/scope/target/data-length/gas,
+keyed nonces, recent-root reference, resolved payer) and several earlier
+rendering gaps are fixed in this build: the block/receipt join is correct
+(real block number, Success status, real gas), and frame transactions no
+longer show a bogus Created Contract line.
+
+## Dora rendering fixes re-verified on a fresh lifecycle (2026-07-17, evening)
+
+The operators shipped a further Dora build (`git-1c3f6e23`, replacing
+`git-837c7cea`) claiming fixes for all five gaps filed on 2026-07-16, with the
+nonce fix visible only on newly indexed transactions. Verified against a fresh
+split-architecture lifecycle on a new pool (`0xf02a4398…`, source
+`0x704e6540…`): shield 0.1 ETH from an account at nonce 83 (block 228503),
+self-paying transfer (block 228524), self-paying withdrawal (block 228847).
+Vectors in `devnet/vectors/2026-07-17-dora-render-fixes/`.
+
+Four of the five gaps are fixed, and one is partially fixed. The block/receipt
+join is correct on new and pre-upgrade transactions alike (real block, real
+timestamp, Success status, real gas; the misleading failure badge is gone).
+The bogus Created Contract line is gone retroactively; the transaction page
+now renders From and To from the frame structure instead of deriving
+CREATE(from, 0). Values render exactly (the 0.1 ETH shield shows "0.1 ETH",
+not the float64 artifact 0.100000000000000006). The details Nonce field is now
+wired to the type-6 payload: the seq-83 shield shows Nonce 83, matching the
+keyed-nonce line, and pool-sender spends correctly show 0. Search now resolves
+frame transactions (`/search?q=<hash>` 301-redirects to the transaction page),
+and the new execution indexer (`data-execution-indexer-enabled`) also lists
+frame transactions on address pages, so discovery is no longer by hash only.
+
+Three residual gaps, none blocking. There is still no global `/transactions`
+listing page (404; `/txs`, `/el_transactions` likewise). Search resolves only
+transactions the new execution indexer has seen: pre-upgrade hashes such as
+the 2026-07-16 transfer `0xe60fb3f6…` return an empty result page, though
+their `/tx/` pages render fully. And address pages index only the top-level
+from/to, so a shield does not appear on the pool's address page even though
+its SENDER frame pays the pool 0.1 ETH; frame-level targets are not indexed
+per address.
+
+Two operational notes from the run itself. `ShieldedPoolLogic` now measures
+12,481,836 deploy gas under EIP-8037 (up from the ~11.7M noted yesterday); the
+script's former 12M limit failed at the code deposit and
+`run_live_dispatcher.sh` now passes 14M, leaving ~2.3M of headroom under the
+EIP-7825 cap before the logic needs a split. And the fixture's 0.005 ETH
+proof-bound fee no longer clears `fee >= max_cost` at the default ~1 gwei max
+fee with the settle frame pinned at 10M gas (max_cost ≈ 0.0104 ETH): the spend
+is rejected in the pool's own VERIFY during simulation. The run passed 0.4
+gwei (`--max-fee-per-gas 400000000 --max-priority-fee-per-gas 400000000`,
+max_cost ≈ 0.00415 ETH). Post-state exact: pool balance 0.098836… ETH is the
+0.1 ETH shield minus precisely the two spends' gas at 0.4 gwei, with the
+0.02 ETH withdrawal held as a recipient credit.
+
+## Self-pay no longer requires the payer TXPARAM (2026-08-13)
+
+The public Hegotá endpoint at ethrex revision `eef9f712` now accepts a prefix
+budget of 500,000 gas and rejects 500,001. Its chain configuration still leaves
+`payerTxparamTime` unset, so `TXPARAM(0x11)` exceptional-halts. The previous
+envelope probe read it unconditionally. A proof-bearing transfer therefore
+passed frame 0 at 286,186 gas, then reverted its SENDER frame after consuming
+about 100,000 gas in the capped probe call.
+
+The minimal correction is structural. In the exact two-frame grammar, the
+pool's combined execution-and-payment approval makes the pool both sender and
+payer, so settlement derives `payer = address(this)` and the probe leaves its
+eleventh word zero. Only the optional three-frame sponsored grammar executes
+`TXPARAM(0x11)` and validates the returned address. This change is applied to
+the Solidity reference, monolithic Yul pool, and dispatcher settlement logic.
+Their self-pay regressions now pass a zero payer word, while sponsored zero and
+dirty-high-bit payer words still revert.
+
+The patch was validated live before being filed. A fresh dispatcher at
+`0x57436abb4005b24763ce8166b44b520ea1a89c7d` completed shield
+`0xabb3c783f13547e681b6ee9c8fd0f2a13239aa82836bec2f0fc95ec2bcbbb19e`
+(block 29,010), private transfer
+`0x384cf35b934a1b0c44197b4b866f6c7e94efb421004beb46b1cfa4cbfd892e85`
+(block 29,012), and private withdrawal
+`0xaeee541e9535b317c51f716bb4f6ad51f27f1d090b3a37760a132f389ccda4f6`
+(block 29,014), all with receipt status 1. The self-paying core is therefore
+compatible with deployments where the payer selector is disabled. Sponsorship
+still requires that selector to be active.

@@ -22,6 +22,8 @@ from poseidon_bn254 import P, p2, tagged, TAG_PK, TAG_LEAF, TAG_NULL  # noqa: E4
 DEPTH = 20
 MAX_VALUE = 1 << 128
 DOMAIN_TAG = bytes.fromhex("40752e102d2a749c61d42a71e297edd3b493de639003b9480a700d589d98065b")
+SINK_INNERS = (1, 2)
+SECP256K1_N = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
 
 _RNG = None  # None = cryptographic secrets; set_seed makes note generation reproducible
 
@@ -54,13 +56,16 @@ def commitment(spend_key, rho, value):
     return tagged(TAG_LEAF, inner(spend_key, rho), value)
 
 
-def domain_scalar(chain_id, source_id):
-    """keccak256(DOMAIN_TAG || uint256_be(chain_id) || source_id) mod Fr."""
-    if isinstance(source_id, str):
-        source_id = bytes.fromhex(source_id.removeprefix("0x"))
-    if len(source_id) != 32 or not 0 <= chain_id < 1 << 256:
-        raise ValueError("domain inputs must be uint256 chain_id and bytes32 source_id")
-    return int.from_bytes(keccak(DOMAIN_TAG + chain_id.to_bytes(32, "big") + source_id), "big") % P
+def domain_scalar(chain_id, pool_address):
+    """Stable nullifier domain for one immutable pool across all tree epochs."""
+    if isinstance(pool_address, str):
+        pool_address = bytes.fromhex(pool_address.removeprefix("0x"))
+    elif isinstance(pool_address, int):
+        pool_address = pool_address.to_bytes(20, "big")
+    if len(pool_address) != 20 or not 0 <= chain_id < 1 << 256:
+        raise ValueError("domain inputs must be uint256 chain_id and address20 pool")
+    padded_pool = bytes(12) + pool_address
+    return int.from_bytes(keccak(DOMAIN_TAG + chain_id.to_bytes(32, "big") + padded_pool), "big") % P
 
 
 def nullifier(domain, spend_key, cm):
@@ -70,6 +75,18 @@ def nullifier(domain, spend_key, cm):
 def new_note():
     """Fresh (spend_key, rho); the wallet keeps both secret."""
     return rand_fe(), rand_fe()
+
+
+def new_authorizer():
+    """Fresh one-time secp256k1 key and its Ethereum address as an integer."""
+    from eth_keys import keys
+    if _RNG is None:
+        secret = secrets.randbelow(SECP256K1_N - 1) + 1
+    else:
+        secret = _RNG.randrange(1, SECP256K1_N)
+    raw = secret.to_bytes(32, "big")
+    key = keys.PrivateKey(raw)
+    return "0x" + raw.hex(), int.from_bytes(key.public_key.to_canonical_address(), "big")
 
 
 def dummy_input():
@@ -129,13 +146,25 @@ class Tree:
 
 # ---- witness building ----
 
-def ctx_for_recipient(addr_hex):
-    """The recipient address as one field element (matches ShieldedPool.ctxFor)."""
+def address_scalar(addr_hex):
+    """An Ethereum address represented as its canonical field element."""
     h = addr_hex[2:] if addr_hex.startswith("0x") else addr_hex
     return int(h, 16)
 
 
-def build_witness(tree, inputs, outputs, domain, public_amount=0, fee=0, recipient=None):
+def sink_outputs():
+    """The two position-specific canonical zero outputs."""
+    return [(SINK_INNERS[0], 0), (SINK_INNERS[1], 0)]
+
+
+def sink_commitments():
+    return [tagged(TAG_LEAF, SINK_INNERS[i], 0) for i in range(2)]
+
+
+def build_witness(
+    tree, inputs, outputs, domain, *, authorizer, public_amount=0, fee=0,
+    recipient=None,
+):
     """A join-split witness against the current tree, as the circom input map.
 
     inputs: exactly two dicts {sk, rho, value, idx} (idx None for a dummy,
@@ -144,6 +173,7 @@ def build_witness(tree, inputs, outputs, domain, public_amount=0, fee=0, recipie
     Values must conserve: sum(in) == sum(out) + public_amount + fee.
     """
     assert len(inputs) == 2 and len(outputs) == 2
+    assert any(i["value"] > 0 for i in inputs), "at least one real input is required"
     assert all(i["idx"] is not None or i["value"] == 0 for i in inputs), \
         "a dummy input must have value 0"
     total_in = sum(i["value"] for i in inputs)
@@ -151,8 +181,16 @@ def build_witness(tree, inputs, outputs, domain, public_amount=0, fee=0, recipie
     assert total_in == total_out, f"not conserved: {total_in} != {total_out}"
     assert all(0 <= v < MAX_VALUE for v in
                [public_amount, fee] + [i["value"] for i in inputs] + [v for _, v in outputs])
+    assert 0 < authorizer < 1 << 160
+    for k, (out_inner, value) in enumerate(outputs):
+        if value == 0:
+            assert out_inner == SINK_INNERS[k], "zero output must use its positional sink"
+        else:
+            assert out_inner not in SINK_INNERS, "positive output uses a reserved sink inner"
+    assert output_commitments(outputs)[0] != output_commitments(outputs)[1], \
+        "output commitments must be distinct"
 
-    ctx = ctx_for_recipient(recipient) if recipient is not None else 0
+    recipient_value = address_scalar(recipient) if recipient is not None else 0
     sibs, bits = [], []
     for i in inputs:
         if i["idx"] is None:
@@ -174,7 +212,8 @@ def build_witness(tree, inputs, outputs, domain, public_amount=0, fee=0, recipie
         "out_value": [str(v) for _, v in outputs],
         "public_amount": str(public_amount),
         "fee": str(fee),
-        "ctx": str(ctx),
+        "recipient": str(recipient_value),
+        "authorizer": str(authorizer),
     }
 
 

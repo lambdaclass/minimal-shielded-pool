@@ -1,0 +1,30 @@
+{
+  "production": false,
+  "ceremony": {
+    "phase2_contributions": 1,
+    "independent_verification": null,
+    "label": "single-party disposable testbed"
+  },
+  "profile": {
+    "chain_id": 8141,
+    "verify_frame_gas": 320000,
+    "signature_gas": 2800,
+    "required_verify_budget": 322800,
+    "max_observed_verify_gas": 294401,
+    "eip_8141_public_mempool_budget": 100000,
+    "eip_8369_profile_2_budget": 1048576,
+    "settle_frame_gas": 2000000,
+    "conservative_settle_bound": 1721526
+  },
+  "artifacts": {
+    "build/spend.r1cs": "8b07031680a6d86e9261f64291e398ad9031abb09dcdf3f1d7ca86735847d15e",
+    "build/spend_final.zkey": "3a2bcbedd704e05cdbabfcc027c3f27a647380da84c83e506c3fdec5913b877a",
+    "build/spend_js/spend.wasm": "4935c11e3be2309af2b6bf6fa9821eaaaf41ffd481716483d0f28b73ed363a2b",
+    "contracts/src/Groth16Verifier.sol": "9667eab74b1efdd0a6cc5c419e6dbe4b7cb78ad29b5ed8ecf3b3d40886b286ac",
+    "devnet/ShieldedPoolDispatcher.yul": "abd790171378d0d94bd2ed4e7b8bd4370a3070d08459eb562238bfbc9847ccf4",
+    "devnet/build/shielded_pool_dispatcher_init.hex": "b7210caa20898606e69a7d960bd49af2522dc01572fd6f282297d8f9c53823e1",
+    "contracts/src/ShieldedPoolLogic.sol": "7c05d484877146222ff1250e625ecb1d819c7aa409091a1affc41443f762cd5b",
+    "circuits/spend.circom": "3d100fbf47852a50ee7fc5bf4fa2e8735e072f2c96533b9cb028168ccb6a78ea",
+    "tooling/check_gas_profile.py": "810b6a6450be4d6b0bc7cd6286e75f8e38a049b0ff7883467d1efe608972be7f"
+  }
+}

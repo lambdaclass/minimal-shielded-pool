@@ -1,0 +1,15 @@
+{
+ "rpc": "https://rpc1.hegota.ethrex.xyz",
+ "pool": "0xf6f36f015764db4685cd1aa924eea156e02fd19b",
+ "probe": "0xdf38461779005ac984e5f6a3ce7739c9c45a943e",
+ "verifier": "0x712516e61C8B383dF4A63CFe83d7701Bce54B03e",
+ "poseidonT3": "0xbCF26943C0197d2eE0E5D05c716Be60cc2761508",
+ "poseidonT4": "0x59F2f1fCfE2474fD5F0b9BA1E73ca90b143Eb8d0",
+ "logic": "0x6b1572A8bd6177fcEEfe66F7AA6281400C6E217B",
+ "poolSender": "0xf6f36f015764db4685cd1aa924eea156e02fd19b",
+ "paymaster": "",
+ "paymasterB": "",
+ "sourceId": "0x08ef30269b17fc5c8d063e58f4094c677062c53e9d71bd29de889ba230f67811",
+ "_slot_transfer": 203762,
+ "_slot_withdraw": 203732
+}

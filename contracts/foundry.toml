@@ -16,8 +16,7 @@ fs_permissions = [
     { access = "read", path = "../wallet" },
     { access = "read", path = "../devnet/build" },
 ]
-# devnet/build holds the Yul artifacts the test suites read: the monolith
-# (shielded_pool_init.hex) and the dispatcher (shielded_pool_dispatcher_init.hex).
+# devnet/build holds the immutable dispatcher artifact read by the tests.
 
 # Legacy-codegen profile for the split Poseidon libraries (PoseidonT3/T4):
 # via-IR emits ~3KB of dispatch glue per library, which pushes PoseidonT4 past
@@ -32,7 +31,5 @@ solc_version = "0.8.30"
 optimizer = true
 optimizer_runs = 1
 via_ir = false
-# the step-2 test suite no longer compiles under legacy codegen (stack too
-# deep in the mock-probe tests); only the two libraries are deployed from
-# this profile, so skip tests entirely
+# Only the two Poseidon libraries are deployed from this profile, so skip tests.
 skip = ["test/**"]

@@ -1,109 +1,25 @@
 #!/usr/bin/env python3
-"""Run the native-ETH BN254 shielded pool as an EIP-8141 frame-native
-application on the Hegotá devnet (lambdaclass/ethrex hegota-devnet).
+"""Build and submit the minimal pool's EIP-8141 FrameTxs on ethrex.
 
-All note values, public amounts, fees, withdrawals, and payer credits are
-denominated in wei. Deposits use msg.value. There is no ERC-20 interface,
-token address, exchange-rate logic, or token-to-ETH paymaster conversion.
+Spends use one exact grammar:
 
-Each pool interaction rides a type-0x06 frame transaction:
+  VERIFY(pool, proof, execution+payment) -> SENDER(pool, settle(Spend))
 
-  shield:   frames = [ VERIFY(target=sender, self-verify sig -> APPROVE),
-                       SENDER(target=pool, value=amount, data=shield(inner)) ]
-  transfer: frames = [ VERIFY(target=pool, proof authorization,
-                              execution + payment),
-                       SENDER(target=pool, value=0, data=transfer(Spend)) ]
-  withdraw: same, data=withdraw(Spend, recipient)
+The pool is sender and payer. EIP-8250 keys are the two proof nullifiers. The
+sole secp256k1 signature comes from the fresh authorizer selected by the proof,
+so it binds the complete transaction, including proof bytes, gas, fees and the
+exact EIP-8272 reference. The reference slot is read from EIP-7843
+`slotNumber`; timestamp derivation is intentionally unsupported.
 
-  optional sponsored form:
-            frames = [ VERIFY(target=pool, proof authorization, execution),
-                       VERIFY(target=paymaster, bound Spend carrier, payment),
-                       SENDER(target=pool, value=0, data=spend) ]
+Usage (append --dry-run to simulate without submitting):
+  pool_frametx.py <rpc> config.json fixture.json shield   <funded-private-key>
+  pool_frametx.py <rpc> config.json fixture.json transfer <unused>
+  pool_frametx.py <rpc> config.json fixture.json withdraw <unused>
 
-For spends the pool IS the transaction sender (EIP-8250's intended shape:
-FrameTx { sender = PrivacyPool, nonce_keys = [nA, nB], nonce_seq = 0 }). The
-pool's frame-0 VERIFY (empty calldata) authenticates the proof, exact
-nonce-key set, recent-root reference and settlement data before approving
-execution; the SENDER frame is then a self-call that settles. Every
-nullifier gets one EIP-8250 namespace under the pool's address without an
-operator-held key, so spends with disjoint nullifiers are includable in the
-same block. Spends default to sender = cfg pool; --sender overrides (for
-adversarial vectors or legacy split-sender deployments).
-
-The Groth16 proof is verified INSIDE the pool call (BN254 pairing precompiles),
-so no attester is needed: the whole spend, proof check
-included, executes on the devnet as an ordinary application frame.
-
-Since the settle-only pool (step 2), transfers and withdraws always bind the
-same core facts: the pool keeps no spent set and no root history, so _spend
-refuses to settle unless the transaction consumed exactly the proven
-nullifiers as protocol keyed nonces and declared the proven root as its
-recent-root reference. The default is EIP-8141 self relay: the pool is both
-sender and payer, and its VERIFY frame approves execution and payment after
-checking the proof, envelope, keyed nonces, recent root, and `fee >= max_cost`.
-No paymaster is part of that privacy flow.
-
-`--sponsored` or `--paymaster 0x...` selects the optional ETH-funded EIP-8141
-`[only_verify, pay]` fee-abstraction variant. Its bounded paymaster
-(`paymaster.py`) authenticates the successful proof-authorized
-frame 0, binds its Spend carrier byte-for-byte to settlement, requires the
-proof-bound fee to cover TXPARAM(0x06), and APPROVEs payment only if the
-envelope binds to POOL_SENDER (TXPARAM 0x02),
-nonce_seq == 0, exactly three frames, nonce_keys == sorted{nf1, nf2}
-(NONCEKEYLOAD), and one declared EIP-8272 recent-root reference carrying the
-pool's source_id and the spend's proven root (RECENTROOTREFLOAD 0xB5). The
-faithful tx therefore declares `recent_root_references = [[source_id, slot,
-root]]`, with slot the consensus slot of the block that published the root
-(derived from that block's timestamp the same way ethrex's derivedSlotTime
-knob does); the protocol validates the reference at admission and at block
-execution, which makes root recency protocol-enforced. The pool re-binds the
-same envelope facts in the SENDER frame via EnvelopeProbe.yul, including the
-authenticated resolved payer at TXPARAM(0x11). Settlement credits an external
-payer in ETH, with no caller-selected routing field. For self-pay, the ETH fee
-stays in the pool to offset its gas debit. The
-sender bind is what lets the paymaster rely on frame 0 rather than perform a
-second Groth16 check. The preferred immutable dispatcher verifies inline and
-the paymaster is SLOAD-free, so neither frame trips the observer's
-StorageReadNonSender ban. The proof check plus two first-use keyed-nonce
-charges require more than the draft 100k validation budget even without a
-paymaster. The self-paying prefix declares 350k; the optional sponsored prefix
-declares 300k + 100k. Both fit MAX_VERIFY_GAS=500k on Hegotá, and
-since 2026-07-08 non-zero nonce_keys are public-mempool admissible, so the
-spends submit through the public RPC. In sponsored mode the paymaster must be
-funded because it is the payer.
-
-Usage (append --dry-run to any to simulate without submitting):
-  pool_frametx.py <rpc> deploy-config.json fixture.json shield   <priv>
-  pool_frametx.py <rpc> deploy-config.json fixture.json transfer <signer_priv> [--sender 0x...] [--sponsored | --paymaster 0x...]
-  pool_frametx.py <rpc> deploy-config.json fixture.json withdraw <signer_priv> [--sender 0x...] [--sponsored | --paymaster 0x...]
-
-`--sender` decouples the authenticated frame sender from the outer signature's
-signer. Spends default it to the pool itself: the pool's VERIFY frame grants
-execution authority, while any submitter supplies the one outer signature the
-current devnet grammar requires. That submitter is neither sender nor payer.
-
-`--max-fee-per-gas` and `--max-priority-fee-per-gas` help construct repeatable
-fee-boundary tests. The builder prints the exact TXPARAM(0x06) value, including
-frame limits, intrinsic and envelope calldata gas, signature verification, and
-recent-root-reference gas, using ethrex's current formula.
-
-Adversarial-suite flags (spends only; see devnet/vectors/ for archived runs):
-`--flip-proof` flips one bit in pA[0] in both proof-bearing frames, producing a
-reproducible invalid-proof vector without hand-editing a fixture.
-`--nonce-keys 0x..,0x..` replaces the protocol nonce keys, for wrong-key
-rejection vectors. `--settle-gas N` overrides the pinned 10M settlement frame
-gas, for down-gassing vectors. `--save-raw <path>` writes the signed raw
-transaction bytes, so mined transactions can be replayed as admission-level
-rejection vectors and archived.
-
-Nonce-race flags (see wallet/gen_nonce_race.py): `--note N` shields the note at
-index N of a fixture's `shields` array (two notes into one tree). `--spend-key
-KEY` drives the spend from fix[KEY] instead of fix[op], so the fixture's second
-transfer `transfer_c` shares the harness. `--root-slot N` sets the recent-root
-publication block directly (both race transfers bind the same root R, so they
-share the block where the second shield completed the tree). Two transfers that
-consume disjoint nullifier sets are both admissible from one shared sender at
-nonce_seq 0 in either order: no sequential account nonce serializes them.
+Spend signing keys come from the fixture's proof-bound
+`authorizer_private_key`. `--root-slot N` supplies the consensus slot in which
+`publishEpochRoot(epoch)` committed the root. Negative-vector flags include
+`--flip-proof`, `--nonce-keys`, `--settle-gas`, and `--sender`.
 """
 import json
 import subprocess
@@ -115,7 +31,9 @@ from eth_keys import keys
 from frametx import Frame, FrameSig, FrameTx
 
 
-SPEND_TUPLE = "(bytes32,bytes32,bytes32,bytes32,bytes32,bytes32,uint256,uint256,bytes32,uint256[2],uint256[2][2],uint256[2])"
+SPEND_TUPLE = "(bytes32,uint64,uint64,bytes32,bytes32,bytes32,bytes32,bytes32,uint256,uint256,address,address)"
+VERIFY_FRAME_GAS = 320_000
+SETTLE_FRAME_GAS = 2_000_000
 
 
 def rpc(url, method, params):
@@ -161,13 +79,21 @@ def cast_calldata(sig, *args):
 
 
 def spend_args(entry):
-    """The Spend tuple literal (for cast) from a fixture spend entry."""
-    p = entry["proof"]
-    pair = lambda v: "[" + ",".join(str(int(x, 16)) for x in v) + "]"
-    pb = "[" + ",".join(pair(row) for row in p["pB"]) + "]"
-    return (f'({entry["root"]},{entry["domain"]},{entry["nf1"]},{entry["nf2"]},'
+    """The publics-only Spend tuple literal (for cast) from a fixture entry."""
+    return (f'({entry["root"]},{entry["root_slot"]},{entry["epoch"]},'
+            f'{entry["domain"]},{entry["nf1"]},{entry["nf2"]},'
             f'{entry["out_cm1"]},{entry["out_cm2"]},{entry["public_amount"]},'
-            f'{entry["fee"]},{entry["ctx"]},{pair(p["pA"])},{pb},{pair(p["pC"])})')
+            f'{entry["fee"]},{entry["recipient"]},{entry["authorizer"]})')
+
+
+def proof_bytes(entry):
+    """The raw 256-byte proof (pA || pB || pC in snarkjs calldata word order):
+    frame 0's calldata. The frame-0 verifier reads these eight words directly;
+    settlement never carries them."""
+    p = entry["proof"]
+    words = [p["pA"][0], p["pA"][1], p["pB"][0][0], p["pB"][0][1],
+             p["pB"][1][0], p["pB"][1][1], p["pC"][0], p["pC"][1]]
+    return b"".join(int(w, 16).to_bytes(32, "big") for w in words)
 
 
 RECENT_ROOT_ADDRESS = "0x0000000000000000000000000000000000008272"
@@ -180,29 +106,29 @@ def _keccak(b):
 
 
 def recent_root_ref(url, cfg, e):
-    """The pre-encoded EIP-8272 envelope reference [source_id, slot, root] for
-    the spend's root. `e["slot"]` is the block number that published the root
-    (threaded in as cfg _slot_transfer/_slot_withdraw from the receipt); its
-    consensus slot is derived from that block's timestamp the way ethrex's
-    derivedSlotTime knob does: (timestamp - genesis_timestamp) / seconds_per_slot.
+    """Encode and locally verify the exact EIP-8272 reference.
 
-    ethrex keys the derivation on ChainConfig.genesis_timestamp and
-    seconds_per_slot, which need not equal EL block 0's timestamp or a
-    hardcoded 6s. We prefer explicit cfg values and fall back to block 0 / 6s,
-    then VERIFY the derived reference against the committed predeploy entry
-    before returning it. A wrong slot (mismatched genesis/seconds) fails here
-    loudly instead of silently producing an unadmittable transaction. The
-    the pool's VERIFY binds source_id and root (RECENTROOTREFLOAD); an optional
-    paymaster re-binds the same tuple. The protocol enforces the recency window
-    and this same committed entry."""
+    The slot is the consensus `slotNumber` returned by EIP-7843. It is never
+    reconstructed from timestamps. The epoch selects the pool's deterministic
+    EIP-8272 source while the nullifier domain remains stable across epochs.
+    """
     from frametx import rlp_bytes, rlp_int, rlp_list
-    pub_block = int(e["slot"])
-    ts = int(rpc(url, "eth_getBlockByNumber", [hex(pub_block), False])["timestamp"], 16)
-    genesis_ts = int(cfg["genesisTimestamp"]) if "genesisTimestamp" in cfg \
-        else int(rpc(url, "eth_getBlockByNumber", ["0x0", False])["timestamp"], 16)
-    slot = (ts - genesis_ts) // int(cfg.get("secondsPerSlot", 6))
-    source_id = bytes.fromhex(cfg["sourceId"].removeprefix("0x"))
+    slot = int(e["root_slot"])
+    epoch = int(e["epoch"])
+    pool = int(cfg["pool"], 16)
+    source_id = _keccak(pool.to_bytes(20, "big") + epoch.to_bytes(32, "big"))
     root = bytes.fromhex(e["root"].removeprefix("0x"))
+
+    head = rpc(url, "eth_getBlockByNumber", ["latest", False])
+    if "slotNumber" not in head:
+        raise SystemExit("latest block has no EIP-7843 slotNumber; refusing timestamp derivation")
+    now_slot = int(head["slotNumber"], 16)
+    if now_slot - slot >= RECENT_ROOT_LENGTH:
+        raise SystemExit(
+            f"  recent-root ref expired: publication slot {slot} is outside the "
+            f"{RECENT_ROOT_LENGTH}-slot window at current slot {now_slot}. If the tree has not "
+            f"changed since the proof's root, call publishEpochRoot({epoch}), read that block's "
+            f"slotNumber, and re-sign with --root-slot set to that consensus slot.")
 
     # Self-check: the committed entry the protocol will validate against must
     # already exist for this (source_id, slot, root). One definition, shared
@@ -212,17 +138,18 @@ def recent_root_ref(url, cfg, e):
     stored = rpc(url, "eth_getStorageAt", [RECENT_ROOT_ADDRESS, "0x" + skey.hex(), "latest"])
     if bytes.fromhex(stored.removeprefix("0x").rjust(64, "0")) != entry:
         raise SystemExit(
-            f"  recent-root ref self-check failed: derived slot {slot} for block {pub_block} "
-            f"has no committed entry at the predeploy. Check cfg genesisTimestamp/secondsPerSlot "
-            f"against the chain's ChainConfig; a wrong slot would be rejected as "
-            f"FrameTxRecentRootNotCommitted.")
+            f"  recent-root ref self-check failed at consensus slot {slot}. The "
+            f"fixture root differs from the root committed at that slot (a fixture generated "
+            f"against an empty tree cannot spend into a pool that already has leaves; regenerate "
+            f"against a fresh deployment), or the wrong epoch/slot was supplied. Either would be "
+            f"rejected as FrameTxRecentRootNotCommitted.")
     return rlp_list([rlp_bytes(source_id), rlp_int(slot), rlp_bytes(root)])
 
 
 def build_and_send(url, pk, pool, value, calldata, protocol_nonces=None, proof_verify=None,
                    recent_root_refs=None, dry_run=False, sender_override=None,
                    max_fee_override=None, max_priority_override=None,
-                   settle_gas_override=None, save_raw=None):
+                   settle_gas_override=None, save_raw=None, frame0_data=b""):
     signer = int.from_bytes(pk.public_key.to_canonical_address(), "big")
     sender = sender_override if sender_override is not None else signer
     chain_id = int(rpc(url, "eth_chainId", []), 16)
@@ -238,33 +165,21 @@ def build_and_send(url, pk, pool, value, calldata, protocol_nonces=None, proof_v
     nonce_keys = protocol_nonces if protocol_nonces else [0]
     nonce_seq = 0 if protocol_nonces else nonce
 
-    def build(sender_gas=10_000_000):
+    def build(sender_gas=SETTLE_FRAME_GAS):
         if proof_verify:
-            paymaster, vcalldata = proof_verify
-            if paymaster is None:
-                # Core shape: the pool is sender and payer. Its VERIFY checks
-                # the spend and approves execution + payment in one step.
-                frames = [
-                    Frame(mode=1, flags=0x03, target=sender, gas_limit=350_000, value=0, data=b""),
-                ]
-            else:
-                # Optional fee abstraction: frame 0 approves execution only;
-                # the bounded paymaster in frame 1 approves payment.
-                frames = [
-                    Frame(mode=1, flags=0x02, target=sender, gas_limit=300_000, value=0, data=b""),
-                    Frame(mode=1, flags=0x01, target=paymaster, gas_limit=100_000, value=0, data=vcalldata),
-                ]
+            frames = [
+                Frame(mode=1, flags=0x03, target=sender, gas_limit=VERIFY_FRAME_GAS,
+                      value=0, data=frame0_data),
+            ]
         else:
-            # Today's shape: one self-verify frame approves execution AND payment
-            # (0x03), so the sender is its own payer. VERIFY stays under
-            # FRAME_TX_MAX_VERIFY_GAS = 100k, which caps Σ(prefix frame gas) +
-            # signature cost; 100k exactly is rejected.
+            # Ordinary shield shape: one lightweight self-verify frame approves
+            # execution and payment, so the sender is its own payer. This is
+            # separate from the proof-carrying spend profile above.
             frames = [Frame(mode=1, flags=0x03, target=sender, gas_limit=80_000, value=0, data=b"")]
         # The SENDER frame is not part of the capped prefix. It starts
-        # generous (EIP-8037 state-dimension accounting inflates gas ~2-4x over
-        # Sepolia numbers). Non-spends are sized down from the simulated
-        # per-frame gas below; spends keep the generous default, because an
-        # OOG settle frame after payment approval burns the notes.
+        # fixed to the fork-scoped cap proved by the activation profile. An OOG
+        # after payment approval burns the notes, so wallets may not resize a
+        # spend below that immutable cap.
         frames.append(Frame(mode=2, flags=0, target=pool, gas_limit=sender_gas,
                             value=value, data=calldata))
         tx = FrameTx(
@@ -274,7 +189,9 @@ def build_and_send(url, pk, pool, value, calldata, protocol_nonces=None, proof_v
             max_priority_fee=max_priority, max_fee=max_fee,
             recent_root_refs=recent_root_refs)
         s = pk.sign_msg_hash(tx.sig_hash())
-        sig = bytes([s.v + 27]) + s.r.to_bytes(32, "big") + s.s.to_bytes(32, "big")
+        # EIP-8141 encodes the bare recovery id, 0 or 1. The legacy EVM
+        # convention 27/28 is statically invalid for frame signatures.
+        sig = bytes([s.v]) + s.r.to_bytes(32, "big") + s.s.to_bytes(32, "big")
         tx.signatures = [FrameSig(FrameSig.SECP256K1, signer, b"", sig)]
         return tx
 
@@ -283,7 +200,6 @@ def build_and_send(url, pk, pool, value, calldata, protocol_nonces=None, proof_v
     if save_raw:
         with open(save_raw, "w") as f:
             f.write(raw)
-
     # Dry-run first: pre-check validity, report the resolved payer, and size
     # the (uncapped) SENDER frame from the simulated gas. Degrades to the
     # default limits on an endpoint that does not expose the ethrex_ namespace.
@@ -342,18 +258,21 @@ def build_and_send(url, pk, pool, value, calldata, protocol_nonces=None, proof_v
     else:
         # Since the 2026-07-08 devnet update, non-zero keyed nonces are
         # public-mempool admissible, so the faithful shape is expected to
-        # simulate VALID. An invalid simulation is a real defect (unfunded
-        # paymaster, wrong nonce_keys, stale root, bad calldata), not the old
+        # simulate VALID. An invalid simulation is a real defect (insolvent
+        # pool, wrong nonce keys, stale root, bad calldata), not the old
         # "expected inadmissibility": abort rather than broadcast a doomed tx
         # whose prefix failure the SENDER-revert guard below cannot catch.
-        raise SystemExit(f"  simulate: INVALID ({sim.get('violation')}); not sending")
+        msg = f"  simulate: INVALID ({sim.get('violation')}); not sending"
+        if protocol_nonces and "Nonce mismatch" in str(sim.get("violation", "")):
+            msg += ("\n  a nullifier keyed nonce was already consumed. If this spend comes from a"
+                    "\n  second deterministic fixture against an already-used deployment, the fixed"
+                    "\n  seed reuses the dummy note and its nullifier collides; regenerate with"
+                    "\n  gen_smoke.py --random or deploy a fresh pool.")
+        raise SystemExit(msg)
 
-    # Refuse to send when the SENDER frame reverts in simulation. The common
-    # cause is a transfer landing in the same block the shield published the
-    # root, so roots.check sees current == slot and reverts RootNotRecentForPool
-    # (the root is referenceable only from the next block). Without this guard
-    # the SENDER frame is sized from that cheap revert and the live tx runs out
-    # of gas. Only gate when the sim produced an execution result.
+    # Refuse to send when the SENDER frame reverts in simulation. Validation
+    # should already reject a missing or too-recent EIP-8272 reference; this
+    # separate gate protects against any application-level settlement failure.
     if eff and eff.get("executionStatus") and eff["executionStatus"] != "success":
         raise SystemExit(f"  simulate: SENDER frame reverts "
                          f"({eff.get('executionError') or eff['executionStatus']}); not sending "
@@ -456,42 +375,14 @@ def main():
                 max_fee_override = value
             else:
                 max_priority_override = value
-    # Self-pay is the default. A separate payer is an explicit fee-abstraction
-    # choice, not a requirement of the privacy or keyed-nonce flow.
-    paymaster = cfg.get("paymaster") if "--sponsored" in sys.argv else None
-    if "--paymaster" in sys.argv:
-        i = sys.argv.index("--paymaster")
-        if i + 1 >= len(sys.argv):
-            raise SystemExit("--paymaster requires an address")
-        paymaster = sys.argv[i + 1]
-    for arg in sys.argv[6:]:
-        if arg.startswith("--paymaster="):
-            paymaster = arg.split("=", 1)[1]
     if op in ("transfer", "withdraw"):
-        # The pool is the sender (frame-0 VERIFY identity and settle target in
-        # one contract); --sender still overrides for adversarial vectors.
         if sender_override is None:
             sender_override = pool
-        if "--sponsored" in sys.argv and not paymaster:
-            raise SystemExit("--sponsored requires cfg.paymaster or --paymaster 0x...")
-        if paymaster:
-            try:
-                paymaster_int = int(paymaster, 16)
-            except ValueError:
-                raise SystemExit(f"invalid paymaster address: {paymaster}") from None
-            if paymaster_int == 0 or paymaster_int >= 1 << 160:
-                raise SystemExit(f"invalid paymaster address: {paymaster}")
-        else:
-            paymaster_int = None
-    else:
-        paymaster_int = None
 
     def spend_setup(op_name):
         """Protocol nonces, validation data, and recent-root reference for a
-        settle-only spend. Self-pay is the core shape. If paymaster_int is set,
-        the same tuple also rides in an optional payment frame so that payer can
-        bind it before sponsoring. The pool re-binds the envelope facts in the
-        SENDER frame via EnvelopeProbe.
+        settle-only spend. The proof-selected one-time signer authorizes the
+        complete immutable two-frame transaction.
 
         `--spend-key KEY` reads the spend entry from fix[KEY] instead of
         fix[op_name] (the nonce-race fixture carries two transfers, `transfer`
@@ -506,11 +397,13 @@ def main():
         if flip_proof:
             e["proof"]["pA"][0] = hex(int(e["proof"]["pA"][0], 16) ^ 1)
         protocol_nonces = sorted([int(e["nf1"], 16), int(e["nf2"], 16)])  # strictly increasing
-        verify = (paymaster_int,
-                  cast_calldata(f"verifyProofOnly({SPEND_TUPLE})", spend_args(e)))
         slot = root_slot_override if root_slot_override is not None else cfg[f"_slot_{op_name}"]
-        refs = [recent_root_ref(url, cfg, {"slot": slot, "root": e["root"]})]
-        return e, protocol_nonces, verify, refs
+        e["root_slot"] = str(slot)
+        refs = [recent_root_ref(url, cfg, e)]
+        auth_pk = keys.PrivateKey(bytes.fromhex(e["authorizer_private_key"].removeprefix("0x")))
+        if auth_pk.public_key.to_checksum_address().lower() != e["authorizer"].lower():
+            raise SystemExit("fixture authorizer private key does not match the proof public")
+        return e, protocol_nonces, True, refs, auth_pk
 
     if op == "shield":
         if "shields" in fix:
@@ -527,27 +420,27 @@ def main():
         print(f"shield {value} wei via frame tx -> pool {cfg['pool']}")
         build_and_send(url, pk, pool, value, calldata, dry_run=dry)
     elif op == "transfer":
-        e, protocol_nonces, verify, refs = spend_setup("transfer")
+        e, protocol_nonces, verify, refs, auth_pk = spend_setup("transfer")
         if nonce_keys_override is not None:
             protocol_nonces = nonce_keys_override
-        calldata = cast_calldata(f"transfer({SPEND_TUPLE})", spend_args(e))
-        payer_label = paymaster if paymaster else f"pool {cfg['pool']} (self-pay)"
-        print(f"join-split transfer via frame tx (payer {payer_label}, proof verified on-chain)")
-        build_and_send(url, pk, pool, 0, calldata, protocol_nonces, verify, refs,
+        calldata = cast_calldata(f"settle({SPEND_TUPLE})", spend_args(e))
+        print(f"join-split transfer via frame tx (pool {cfg['pool']} self-pays)")
+        build_and_send(url, auth_pk, pool, 0, calldata, protocol_nonces, verify, refs,
                        dry_run=dry, sender_override=sender_override,
                        max_fee_override=max_fee_override, max_priority_override=max_priority_override,
-                       settle_gas_override=settle_gas_override, save_raw=save_raw)
+                       settle_gas_override=settle_gas_override, save_raw=save_raw,
+                       frame0_data=proof_bytes(e))
     elif op == "withdraw":
-        e, protocol_nonces, verify, refs = spend_setup("withdraw")
+        e, protocol_nonces, verify, refs, auth_pk = spend_setup("withdraw")
         if nonce_keys_override is not None:
             protocol_nonces = nonce_keys_override
-        calldata = cast_calldata(f"withdraw({SPEND_TUPLE},address)", spend_args(e), fix["recipient"])
-        payer_label = paymaster if paymaster else f"pool {cfg['pool']} (self-pay)"
-        print(f"join-split withdraw via frame tx (payer {payer_label})")
-        build_and_send(url, pk, pool, 0, calldata, protocol_nonces, verify, refs,
+        calldata = cast_calldata(f"settle({SPEND_TUPLE})", spend_args(e))
+        print(f"join-split withdraw via frame tx (pool {cfg['pool']} self-pays)")
+        build_and_send(url, auth_pk, pool, 0, calldata, protocol_nonces, verify, refs,
                        dry_run=dry, sender_override=sender_override,
                        max_fee_override=max_fee_override, max_priority_override=max_priority_override,
-                       settle_gas_override=settle_gas_override, save_raw=save_raw)
+                       settle_gas_override=settle_gas_override, save_raw=save_raw,
+                       frame0_data=proof_bytes(e))
     else:
         raise SystemExit(f"unknown op {op}")
 

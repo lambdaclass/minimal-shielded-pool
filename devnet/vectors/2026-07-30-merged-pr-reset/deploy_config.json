@@ -1,0 +1,17 @@
+{
+  "rpc": "https://rpc1.hegota.ethrex.xyz",
+  "chainId": 3151908,
+  "client": "ethrex/v22.0.0-hegota-devnet-a2302ead0b7d2e076b4ab00406057d583d1f4b1f",
+  "pool": "0xea7f8d6e14f6d5c870fa10dafe90d4c5277e9f80",
+  "probe": "0x8137610c3921cbfb7c4e27cfa8ff2b6de134866d",
+  "verifier": "0x81cf4926dd97940B8E23793a7A222fF06Bd84189",
+  "poseidonT3": "0x7cF4777CB06f9E81A6E047cDdc8c7F4a9aeD63aA",
+  "poseidonT4": "0xF4dae92808B4C82c19848C177d63C978b1Ad0bDE",
+  "logic": "0x1e5f91eB483061eCa3c274CfEA70a71d987C1Dd0",
+  "sourceId": "0xd560da04606e2b79487690b22d034c6c27cf3fb01c007bfee776e55a8403772f",
+  "lifecycleRootBlocks": {
+    "transfer": 12998,
+    "withdraw": 13004
+  },
+  "concurrencyRootBlock": 13055
+}

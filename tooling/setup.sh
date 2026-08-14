@@ -51,5 +51,6 @@ echo "==> exporting the verification key and the Solidity verifier"
 npx snarkjs zkey export verificationkey "$BUILD/spend_final.zkey" ../contracts/vectors/spend_vkey.json
 npx snarkjs zkey export solidityverifier "$BUILD/spend_final.zkey" ../contracts/src/Groth16Verifier.sol
 python3 patch_verifier.py
+( cd ../contracts && forge fmt src/Groth16Verifier.sol )
 
 echo "==> done: build/spend_final.zkey (proving), contracts/src/Groth16Verifier.sol (on-chain)"

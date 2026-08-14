@@ -4,8 +4,8 @@
 #   1. compile the circuit + run the (testbed) trusted setup if not done
 #   2. generate fresh witnesses from the reconstructed tree, prove them
 #      (real Groth16), verify each off-chain, write wallet/smoke_fixture.json
-#   3. run the on-chain flow (shield -> transfer -> withdraw) in an in-process
-#      EVM via forge, verifying those real proofs ON-CHAIN (no attester)
+#   3. run the on-chain verifier and settlement safety suites in an in-process
+#      EVM via Forge, including a real proof (no attester)
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -21,8 +21,8 @@ else
   python3 gen_smoke.py
 fi
 
-echo "==> running the on-chain flow (forge, in-process EVM)"
+echo "==> running on-chain verifier and settlement safety tests"
 ( cd ../contracts && forge test -vv )
 
 echo "==> smoke passed: real Groth16 proofs produced, verified off-chain,"
-echo "    and verified ON-CHAIN for shield -> transfer -> withdraw."
+echo "    and verified ON-CHAIN alongside the settlement safety suite."

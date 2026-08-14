@@ -24,14 +24,40 @@ unsound. Derive the expected deployed code by simulating the deployment:
 
   cast call --rpc-url <rpc> --create "$(dispatcher.py --initcode 0x<impl>)"
 
-run_live.sh verifies the deployed dispatcher this way.
+run_live_dispatcher.sh verifies the deployed dispatcher this way.
 """
 import argparse
+import os
+import shutil
 import subprocess
 from functools import lru_cache
 from pathlib import Path
 
-from paymaster import address, solc_binary
+SOLC_VERSION = "0.8.30"
+
+
+def address(value: str) -> int:
+    parsed = int(value, 16)
+    if parsed <= 0 or parsed >= 1 << 160:
+        raise SystemExit(f"invalid address: {value}")
+    return parsed
+
+
+def solc_binary() -> str:
+    candidates = [
+        os.environ.get("SOLC"), shutil.which("solc"),
+        str(Path.home() / "Library" / "Application Support" / "svm" /
+            SOLC_VERSION / f"solc-{SOLC_VERSION}"),
+        str(Path.home() / ".svm" / SOLC_VERSION / f"solc-{SOLC_VERSION}"),
+    ]
+    for candidate in candidates:
+        if candidate and Path(candidate).is_file():
+            version = subprocess.run([candidate, "--version"], capture_output=True,
+                                     text=True, check=True).stdout
+            if f"Version: {SOLC_VERSION}" not in version:
+                raise SystemExit(f"expected solc {SOLC_VERSION}, got: {version.strip()}")
+            return candidate
+    raise SystemExit(f"solc {SOLC_VERSION} not found; set SOLC to the pinned binary")
 
 
 @lru_cache(maxsize=1)

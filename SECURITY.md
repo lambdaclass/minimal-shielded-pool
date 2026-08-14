@@ -2,59 +2,97 @@
 
 ## Status
 
-This repository is unaudited research software. Do not deploy it with real
-value. The committed Groth16 verifier uses a testbed trusted setup whose toxic
-waste is not independently controlled.
+Unaudited research software. Do not use the committed proving key or deployed
+testnet pool for real value. The repository setup is single-party, so its toxic
+waste could forge arbitrary spends.
+
+The previously identified implementation blockers are fixed in the active
+code: complete-envelope authorization, positional sinks, pre-insert epoch
+rollover, separate root publication, canonical Groth16 encodings, direct-call
+rejection, exact two-frame self-payment, and EIP-7843 slot handling. Production
+activation remains blocked on a real ceremony, independent audit, cross-client
+evidence, and fork-specific gas proof.
 
 ## Security model
 
-The asset model is native ETH only. Deposits enter as `msg.value`; all note
-values, public amounts, fees, withdrawals, and payer credits are denominated
-in wei and settle as ETH. No ERC-20 contract is called, and the optional
-paymaster neither accepts tokens nor converts a token-denominated fee into ETH.
+The pool holds native ETH. Notes, fees, withdrawals, and payer costs are all
+wei-denominated. The pool is the EIP-8141 sender and payer. There is no
+sponsorship or caller-selected fee recipient.
 
-The pool is frame-native and depends on the Hegotá implementations of
-EIP-8141, EIP-8250, and EIP-8272. Its two nullifiers are consumed by protocol
-state at payment approval. The core transaction has two frames: the pool's
-VERIFY frame authenticates the proof and keyed nonces, then approves execution
-and payment together; the pool's SENDER frame settles. The pool is both sender
-and payer. A separate paymaster is not required. An optional sponsored form
-inserts a payment-only VERIFY frame. Settlement accepts only these two exact
-grammars and the envelope values returned by `EnvelopeProbe.yul`.
+The circuit selects a fresh nonzero secp256k1 authorizer. EIP-8141 validates
+its canonical low-s signature over the complete FrameTx hash. The dispatcher
+requires that recovered signer through `SIGPARAM`, one signature, one exact
+two-frame grammar, the complete two-key EIP-8250 nonce set, and the exact
+EIP-8272 reference. A copied or rerandomized proof cannot be rewrapped without
+the one-time private key.
 
-The pool deliberately keeps no second spent set. A settlement revert after
-approval permanently consumes the notes. Pull credits remove recipient-call
-failures, and fee routing has no calldata choice: settlement credits the
-nonzero, right-aligned payer authenticated by `TXPARAM(0x11)`. Tests cover
-malformed payer words, self-paying settlement, external payer credits, and the
-envelope and proof failure paths. Tree
-exhaustion remains an explicit testbed limit: retire the pool before its
-depth-20 tree reaches capacity.
+Payment approval consumes the EIP-8250 keys before SENDER settlement. Safety
+therefore requires settlement to be total for every proof-valid admitted
+transaction under the pinned fork gas profile. The implementation removes
+optional post-approval calls. Its required Poseidon operations use fixed-code
+static calls to two immutable, deployment-verified libraries. The 2M SENDER
+constant must be re-proved before every gas repricing fork.
 
-The preferred deployment is an immutable Yul dispatcher at the pool address
-with a Solidity settlement implementation behind `DELEGATECALL`. Proof
-verification happens once, inline in the dispatcher's frame-0 authorization.
-That optimization relies on the dispatcher bytecode and its verifier address
-being immutable. Both addresses are embedded in the deployed code tail rather
-than stored in mutable storage. The implementation remains unaudited, and the
-dispatcher-to-implementation storage layout is therefore a security boundary;
-the Forge suite pins it explicitly.
+The active tree rolls before any non-sink insertion when the current epoch
+lacks capacity. Final roots remain authenticated by pool state. EIP-8272 source
+IDs are distinct per epoch, preventing same-slot historical-publication
+contention. Nullifiers use a stable chain-and-pool domain and never include the
+epoch, so rollover cannot make an old note spendable twice.
 
-Proofs are domain-separated by chain ID and the pool's EIP-8272 source ID.
-The circuit rejects equal nullifiers and range-checks all values to 128 bits.
+Two distinct position-specific zero commitments represent no-output slots.
+They are never inserted. Positive outputs cannot use either reserved inner,
+the two output commitments must differ, and a spend must consume positive
+private value. A full-tree withdrawal therefore creates only a pull credit and
+does not roll or insert.
 
-## Dependencies
+Root publication is not part of settlement. `publishEpochRoot(epoch)` accepts
+no caller-supplied root, reads the active or finalized authenticated root, and
+may safely be retried. A publication failure cannot consume note keys.
+Withdrawals use checks-effects-interactions; a failed claim reverts and restores
+the credit.
 
-The onchain contracts have no package-manager dependencies. JavaScript
-packages are used only to compile circuits, generate test proofs, and export
-vectors. `npm audit` currently reports high-severity transitive advisories in
-the pinned circom/snarkjs toolchain. Do not expose these tools as a network
-service or run them on untrusted inputs. CI rejects critical advisories and
-checks generated artifacts against independent Solidity and Python vectors.
+The Solidity implementation rejects direct state-changing calls. The immutable
+dispatcher owns funds and storage. Deployment verifies the verifier,
+dispatcher, logic, and both Poseidon runtimes before the pool is used.
+
+## Assumptions and remaining gates
+
+- Groth16 soundness, BN254 pairing security, Poseidon collision resistance,
+  Keccak collision resistance, and secp256k1 unforgeability.
+- A production multi-party phase-2 ceremony with destroyed contributions and
+  independent transcript verification.
+- Correct EIP-8141, EIP-8250, EIP-8272, EIP-7843, and EIP-8369 client
+  implementations.
+- An explicitly supported verification budget of at least 322,800 gas. The
+  published EIP-8141 public-mempool value is 100,000 and is insufficient.
+- A fork-scoped proof that 2,000,000 SENDER gas covers all cold-state,
+  rollover, credit, proxy, and static-call paths. Unsupported repricing forks
+  require a new immutable profile.
+- Independent circuit, Solidity, Yul, wallet, and deployment review.
+
+The wallet is a fixture generator, not a production keystore. Random note
+secrets and one-time authorizer keys are not durably backed up.
+
+## Evidence
+
+The Forge suite covers actual Poseidon runtimes, a 2M-capped worst-shape
+rollover with two outputs and a new credit, pre-insert rollover, full-tree
+exit, sink rules, separate publication failure/retry, pull-credit failure,
+direct-call rejection, valid proof verification, coordinate aliases, infinity,
+and authorizer mutation. The circuit generator rejects same-note inputs,
+duplicate outputs, dummy-only spends, wrong sinks, sink-valued positive outputs,
+zero authorizers, and recipient mismatches. The envelope vector mutates 42
+signed components.
+
+The gas derivation is recorded in
+[`devnet/vectors/2026-08-14-tight-gas-profile.md`](devnet/vectors/2026-08-14-tight-gas-profile.md).
+
+The 2026-08-14 ethrex run completed shield, transfer, root refresh, withdrawal,
+claim, and replay rejection. It proves compatibility with that one testnet
+configuration, not production readiness or cross-client interoperability.
 
 ## Reporting
 
 Report vulnerabilities privately to the repository owner before opening a
 public issue. Include the affected commit, a minimal reproduction, impact, and
-any proposed mitigation. Do not test against public deployments or third-party
-infrastructure without permission.
+proposed mitigation. Do not test public deployments without permission.
