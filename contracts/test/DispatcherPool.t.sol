@@ -196,9 +196,7 @@ contract DispatcherPoolTest {
         s.domain = actualPool.domain();
 
         uint256 beforeGas = gasleft();
-        (bool ok,) = address(actualProxy).call{gas: SETTLE_FRAME_GAS}(
-            abi.encodeCall(LogicProxy.settleAsSelf, (s))
-        );
+        (bool ok,) = address(actualProxy).call{gas: SETTLE_FRAME_GAS}(abi.encodeCall(LogicProxy.settleAsSelf, (s)));
         uint256 used = beforeGas - gasleft();
         emit SettlementGasMeasured(used);
 

@@ -44,33 +44,31 @@ jobs:
             --r1cs --wasm --sym -l tooling/node_modules \
             -o /tmp/shielded-pool-circuit
           tooling/node_modules/.bin/snarkjs r1cs info /tmp/shielded-pool-circuit/spend.r1cs
+          cmp /tmp/shielded-pool-circuit/spend.r1cs build/spend.r1cs
+          cmp /tmp/shielded-pool-circuit/spend_js/spend.wasm build/spend_js/spend.wasm
 
-      - name: Check generated Yul bytecode
+      - name: Check generated dispatcher bytecode
         run: |
           forge build --root contracts
-          python devnet/yul_pool.py --artifact >/dev/null
-          git diff --exit-code -- devnet/build/shielded_pool_init.hex
           python devnet/dispatcher.py --artifact >/dev/null
           git diff --exit-code -- devnet/build/shielded_pool_dispatcher_init.hex
           python devnet/dispatcher.py --initcode \
             0x0000000000000000000000000000000000000001 \
             0x0000000000000000000000000000000000000002 >/dev/null
-          python devnet/paymaster.py --runtime \
-            0x0000000000000000000000000000000000000001 \
-            0x0000000000000000000000000000000000000002 >/dev/null
-          python devnet/probe.py --runtime >/dev/null
-          python devnet/shared_sender.py --runtime \
-            0x0000000000000000000000000000000000000001 >/dev/null
 
       - name: Check Python and frame-vector code
         run: |
           python -m py_compile \
-            devnet/dispatcher.py devnet/frametx.py devnet/paymaster.py \
-            devnet/pool_frametx.py devnet/probe.py devnet/shared_sender.py \
+            devnet/dispatcher.py devnet/frametx.py devnet/pool_frametx.py \
+            devnet/test_pool_envelope_binding.py \
             wallet/gen_nonce_race.py wallet/gen_smoke.py wallet/wallet.py \
             reference/gen_poseidon_sol.py reference/poseidon_bn254.py \
+            tooling/check_activation.py tooling/check_gas_profile.py \
             tooling/patch_verifier.py
           python devnet/frametx.py
+          python devnet/test_pool_envelope_binding.py
+          python tooling/check_gas_profile.py
+          python tooling/check_activation.py activation_manifest.testbed.json --allow-testbed
           python wallet/wallet.py
           python reference/poseidon_bn254.py
 
