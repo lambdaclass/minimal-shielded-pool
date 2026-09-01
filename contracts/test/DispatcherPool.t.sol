@@ -174,6 +174,14 @@ contract DispatcherPoolTest {
         require(actualPool.currentEpoch() == 1 && actualPool.nextIndex() == 2, "actual rollover failed");
     }
 
+    /// Measures ONE gas dimension, so this covers the frozen chain-8141 profile's single
+    /// 2,000,000 budget and nothing else. Under the updated EIP-8141 the same settlement is
+    /// declared as two budgets — execution and state — and forge cannot model that split:
+    /// the SSTOREs it counts here are charged to the state pool on chain, not to execution.
+    /// The updated profile's caps are checked by tooling/check_gas_profile.py, whose two
+    /// bounds sum to exactly the single bound this profile uses (1,231,926 + 489,600 =
+    /// 1,721,526), so they are a repartition of this same measured worst case rather than a
+    /// separate estimate.
     function test_two_million_gas_covers_heaviest_reachable_settlement_shape() public {
         address t3 = address(0xA013);
         address t4 = address(0xA014);

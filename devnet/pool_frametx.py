@@ -25,18 +25,32 @@ Spend signing keys come from the fixture's proof-bound
 `--flip-proof`, `--nonce-keys`, `--settle-gas`, and `--sender`.
 """
 import json
+import os
 import subprocess
 import sys
 import time
 import urllib.request
 
 from eth_keys import keys
+
 from frametx import Frame, FrameSig, FrameTx
 
 
 SPEND_TUPLE = "(bytes32,uint64,uint64,bytes32,bytes32,bytes32,bytes32,bytes32,uint256,uint256,address,address)"
 VERIFY_FRAME_GAS = 320_000
-SETTLE_FRAME_GAS = 2_000_000
+# The pre-relaunch dialect declared one budget per frame, so the settlement's state
+# growth had to fit inside its execution budget. The spec declares the two separately
+# (tooling/check_gas_profile.py), which
+# is why the execution figure drops rather than the work getting cheaper.
+SETTLE_FRAME_GAS = 1_400_000
+# Only meaningful on the spec profile. The proof frame writes nothing; settlement grows at most five slots.
+VERIFY_FRAME_STATE_GAS = 0
+SETTLE_FRAME_STATE_GAS = 550_000
+
+
+def _limits(execution, state):
+    """Frame keyword arguments: the two declared budgets of a frame."""
+    return {"gas_limit": execution, "state_limit": state}
 
 
 def rpc(url, method, params):
@@ -171,20 +185,21 @@ def build_and_send(url, pk, pool, value, calldata, protocol_nonces=None, proof_v
     def build(sender_gas=SETTLE_FRAME_GAS):
         if proof_verify:
             frames = [
-                Frame(mode=1, flags=0x03, target=sender, gas_limit=VERIFY_FRAME_GAS,
-                      value=0, data=frame0_data),
+                Frame(mode=1, flags=0x03, target=sender, value=0, data=frame0_data,
+                      **_limits(VERIFY_FRAME_GAS, VERIFY_FRAME_STATE_GAS)),
             ]
         else:
             # Ordinary shield shape: one lightweight self-verify frame approves
             # execution and payment, so the sender is its own payer. This is
             # separate from the proof-carrying spend profile above.
-            frames = [Frame(mode=1, flags=0x03, target=sender, gas_limit=80_000, value=0, data=b"")]
+            frames = [Frame(mode=1, flags=0x03, target=sender, value=0, data=b"",
+                            **_limits(80_000, 0))]
         # The SENDER frame is not part of the capped prefix. It starts
         # fixed to the fork-scoped cap proved by the activation profile. An OOG
         # after payment approval burns the notes, so wallets may not resize a
         # spend below that immutable cap.
-        frames.append(Frame(mode=2, flags=0, target=pool, gas_limit=sender_gas,
-                            value=value, data=calldata))
+        frames.append(Frame(mode=2, flags=0, target=pool, value=value, data=calldata,
+                            **_limits(sender_gas, SETTLE_FRAME_STATE_GAS)))
         tx = FrameTx(
             chain_id=chain_id, nonce_keys=nonce_keys, nonce_seq=nonce_seq, sender=sender,
             frames=frames,

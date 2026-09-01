@@ -9,3 +9,6 @@ wallet/artifacts/
 # the immutable dispatcher initcode is read by the forge suites; keep it tracked
 !devnet/build/
 !devnet/build/shielded_pool_dispatcher_init.hex
+# The archived profile's initcode is a deployment record, tracked like the live one.
+!devnet/vectors/*/build/
+!devnet/vectors/*/build/shielded_pool_dispatcher_init.hex

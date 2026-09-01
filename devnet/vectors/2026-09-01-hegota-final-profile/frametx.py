@@ -1,32 +1,18 @@
 #!/usr/bin/env python3
-"""EIP-8141 FrameTx (type 0x06) encoder, at the spec's current pin.
+"""Ethrex v23 Hegotá FrameTx (type 0x06) encoder.
 
-The envelope as published at ethereum/EIPs `7d1c8bfb94` and implemented by ethrex. The
-dialect the pre-relaunch chain-8141
-deployment uses; the two envelopes are mutually unreadable and each needs its own encoder,
-dispatcher, and gas profile is archived byte-exact under
-`devnet/vectors/2026-09-01-hegota-final-profile/`, the record of what was deployed.
+This is the exact EIP-8141/8250/8272 testnet dialect deployed on chain 8141.
+It is not the newer EIP-8141 draft wire format, which uses nested fees and
+separate execution and state gas limits.
 
-What changed, and why each matters to a signer:
-
-  * the fee fields nest into one `fees` list, taking the envelope from 11 fields to 9, so
-    every signature hash differs;
-  * a frame declares `limits = [execution, state]` rather than one gas limit, because the spec
-    meters EIP-8037 state gas as a second, separately declared dimension;
-  * the intrinsic drops from 15000 to 12000, and a value-carrying frame adds
-    `TX_VALUE_COST` (6000) apiece;
-  * `standard_gas_limit` includes the declared state budgets, and the calldata-floor branch
-    of `max_gas` adds them on top rather than absorbing them.
-
-Wire layout:
+Wire layout (ethrex hegota-devnet), verified against the repo golden vector:
   raw = 0x06 || rlp([chain_id, nonce_keys, nonce_seq, sender, frames, signatures,
-                     fees, blob_hashes, recent_root_references])
-  fees      = rlp([max_priority_fee, max_fee, max_blob_fee])
-  frame     = rlp([mode, flags, target_or_empty, [execution, state], value, data])
+                     max_priority_fee, max_fee, max_blob_fee, blob_hashes,
+                     recent_root_references])
+  frame     = rlp([mode, flags, target_or_empty, gas_limit, value, data])
   signature = rlp([scheme, signer, msg, signature_bytes])  # 0=ARBITRARY, 1=SECP256K1, 2=P256
   sig_hash  = keccak256(0x06 || rlp(envelope with empty-msg signatures' bytes elided))
 """
-import pathlib
 import sys
 from eth_hash.auto import keccak
 
@@ -56,54 +42,16 @@ def addr20(a):  # (was int|bytes; widened for py3.9)
         return a.to_bytes(20, "big")
     return bytes(a)
 
-def rlp_items(encoded: bytes):
-    """Split one RLP list into its top-level items, each still RLP-encoded.
-
-    Enough to assert an envelope's shape without a full decoder: the point is to count
-    fields and look one level in, not to interpret them.
-    """
-    b = encoded
-    if not b or b[0] < 0xC0:
-        raise ValueError("not an RLP list")
-    if b[0] <= 0xF7:
-        body = b[1:1 + (b[0] - 0xC0)]
-    else:
-        n = b[0] - 0xF7
-        body = b[1 + n:1 + n + int.from_bytes(b[1:1 + n], "big")]
-    items, i = [], 0
-    while i < len(body):
-        p = body[i]
-        if p < 0x80:
-            size, head = 1, 0
-        elif p <= 0xB7:
-            size, head = p - 0x80, 1
-        elif p <= 0xBF:
-            n = p - 0xB7
-            size, head = int.from_bytes(body[i + 1:i + 1 + n], "big"), 1 + n
-        elif p <= 0xF7:
-            size, head = p - 0xC0, 1
-        else:
-            n = p - 0xF7
-            size, head = int.from_bytes(body[i + 1:i + 1 + n], "big"), 1 + n
-        items.append(body[i:i + head + size])
-        i += head + size
-    return items
-
-
 # ---------- frame-tx model ----------
 class Frame:
-    def __init__(self, mode, flags, target, gas_limit, value, data, state_limit=0):
+    def __init__(self, mode, flags, target, gas_limit, value, data):
         self.mode, self.flags, self.target = mode, flags, target  # target: 20-byte int/bytes or None
         self.gas_limit, self.value, self.data = gas_limit, value, data
-        # `limits.state`: the frame's EIP-8037 state budget. A state charge past it halts the
-        # frame with execution gas to spare, and it can never be borrowed from `gas_limit`.
-        self.state_limit = state_limit
     def rlp(self, data_override=None):
         tgt = rlp_bytes(addr20(self.target)) if self.target is not None else rlp_bytes(b"")
         data = self.data if data_override is None else data_override
-        limits = rlp_list([rlp_int(self.gas_limit), rlp_int(self.state_limit)])
         return rlp_list([rlp_int(self.mode), rlp_int(self.flags), tgt,
-                         limits, rlp_int(self.value), rlp_bytes(data)])
+                         rlp_int(self.gas_limit), rlp_int(self.value), rlp_bytes(data)])
 
 class FrameSig:
     ARBITRARY = 0
@@ -137,9 +85,9 @@ class FrameTx:
             rlp_list([s.rlp(elide=elide_sigs,
                             signature_override=field_overrides.get(("signature", i)))
                       for i, s in enumerate(self.signatures)]),
-            rlp_list([rlp_int(self.max_priority_fee),
-                      rlp_int(self.max_fee),
-                      rlp_int(self.max_blob_fee)]),
+            rlp_int(self.max_priority_fee),
+            rlp_int(self.max_fee),
+            rlp_int(self.max_blob_fee),
             rlp_list([rlp_bytes(h) for h in self.blob_hashes]),
             rlp_list([r for r in self.recent_root_refs]),  # entries pre-encoded if any
         ]
@@ -187,52 +135,26 @@ class FrameTx:
         return sum(costs[s.scheme] for s in self.signatures)
 
     def recent_root_reference_intrinsic_gas(self) -> int:
-        # EIP-8272 defines these BY FORMULA over the EIP-8038 access-list constants, so they
-        # follow the schedule rather than being fixed: on the v8.1.0 schedule this branch
-        # carries, one address at 2400 plus 1900 + 2*30 + 7*6 = 2002 per referenced key.
-        # The frozen file's 3000/3102 are the same formula on the older schedule.
-        return 0 if not self.recent_root_refs else 2_400 + len(self.recent_root_refs) * 2_002
-
-    def value_transfer_cost(self) -> int:
-        """`TX_VALUE_COST` per value-carrying frame (EIP-8141).
-
-        Per frame, not per distinct recipient, and static because `value` and `target` are
-        transaction fields. It covers the recipient balance write and the EIP-7708 transfer
-        log, exactly as EIP-2780 prices a top-level transfer.
-        """
-        return 6_000 * sum(1 for f in self.frames if f.value)
+        # EIP-8272 resolves the EIP-8038 access-list constants at Hegota:
+        # one address at 3000 plus 3102 per referenced storage key.
+        return 0 if not self.recent_root_refs else 3_000 + len(self.recent_root_refs) * 3_102
 
     def mandatory_gas(self) -> int:
-        # The terms `frame_tx_intrinsic_gas` and `calldata_floor_gas` share. A cost that
-        # belongs on both sides of the `max_gas` comparison must live here, or it is silently
-        # dropped whenever the floor binds.
-        return (12_000 + len(self.frames) * 475
+        return (15_000 + len(self.frames) * 475
                 + self.signature_verification_cost()
-                + self.value_transfer_cost()
                 + self.recent_root_reference_intrinsic_gas())
-
-    def state_gas_limit(self) -> int:
-        return sum(f.state_limit for f in self.frames)
 
     def standard_gas_limit(self) -> int:
         data_cost = sum(self._calldata_gas(field) for field in self._data_fields())
-        return (self.mandatory_gas() + data_cost
-                + sum(f.gas_limit for f in self.frames)
-                + self.state_gas_limit())
+        return self.mandatory_gas() + data_cost + sum(f.gas_limit for f in self.frames)
 
     def calldata_floor_gas(self) -> int:
         tokens = sum(self._calldata_tokens(field) for field in self._data_fields())
         return self.mandatory_gas() + 16 * tokens
 
     def total_gas_limit(self) -> int:
-        """EIP-8141 `max_gas = max(standard_gas_limit, calldata_floor_gas + sum(limits.state))`.
-
-        State gas is added on top of the floor rather than absorbed by it: the floor bounds
-        what a transaction's data costs to include, and state growth never rides free under
-        it.
-        """
-        return max(self.standard_gas_limit(),
-                   self.calldata_floor_gas() + self.state_gas_limit())
+        """EIP-8141 max_gas, matching deployed ethrex a2302ead."""
+        return max(self.standard_gas_limit(), self.calldata_floor_gas())
 
     def validation_prefix(self):
         """Return the validation prefix for an accepted MATCHA v1 shape.
@@ -306,78 +228,36 @@ class FrameTx:
 
 # ---------- golden-vector validation ----------
 if __name__ == "__main__":
-    # This envelope must differ from the frozen encoding of the same transaction in exactly two
-    # places — the nested fees and the per-frame limits list — and the sig hash must move
-    # with it. Rather than pin a hand-computed vector, which only proves this file agrees
-    # with itself, assert the structural invariants and the divergence from the frozen dialect.
-    # The authoritative check is `test_frametx_against_node.py`, which offers the bytes
-    # to a live ethrex.
-    import importlib.util as _ilu
-    _spec = _ilu.spec_from_file_location(
-        "frametx_frozen",
-        pathlib.Path(__file__).resolve().parent.parent / "devnet/vectors/2026-09-01-hegota-final-profile/frametx.py",
+    golden = FrameTx(
+        chain_id=1,
+        nonce_keys=[0],
+        nonce_seq=7,
+        sender=0xABCD,
+        frames=[
+            Frame(mode=1, flags=3, target=None, gas_limit=0x5208, value=0, data=bytes([0x11, 0x22])),
+            Frame(mode=2, flags=0, target=0x1234, gas_limit=0x9c40, value=0, data=b""),
+        ],
+        signatures=[FrameSig(FrameSig.SECP256K1, 0xABCD, b"", bytes([0x01] * 65))],
+        max_priority_fee=0x3b9aca00,
+        max_fee=0x6fc23ac00,
     )
-    frozen = _ilu.module_from_spec(_spec)
-    _spec.loader.exec_module(frozen)
-
-    def build(mod, **kw):
-        return mod.FrameTx(
-            chain_id=1,
-            nonce_keys=[0],
-            nonce_seq=7,
-            sender=0xABCD,
-            frames=[
-                mod.Frame(mode=1, flags=3, target=None, gas_limit=0x5208, value=0,
-                          data=bytes([0x11, 0x22]), **kw),
-                mod.Frame(mode=2, flags=0, target=0x1234, gas_limit=0x9C40, value=0, data=b""),
-            ],
-            signatures=[mod.FrameSig(mod.FrameSig.SECP256K1, 0xABCD, b"", bytes([0x01] * 65))],
-            max_priority_fee=0x3B9ACA00,
-            max_fee=0x6FC23AC00,
-        )
-
-    spec_tx = build(sys.modules[__name__])
-    frozen_tx = build(frozen)
-
-    ok = True
-
-    def check(name, cond, detail=""):
-        global ok
-        print(f"  {'PASS' if cond else 'FAIL'}  {name}{(' — ' + detail) if detail else ''}")
-        ok = ok and cond
-
-    # 9 top-level fields, not 11: the three fee scalars became one list.
-    body = spec_tx.encode()
-    fields = rlp_items(body)
-    check("the envelope has 9 top-level fields", len(fields) == 9, f"got {len(fields)}")
-    check("field 6 is the nested fees list", len(rlp_items(fields[6])) == 3,
-          f"got {len(rlp_items(fields[6]))} entries")
-    # Each frame carries [execution, state] where the frozen dialect carried one scalar.
-    frame0 = rlp_items(rlp_items(fields[4])[0])
-    check("a frame has 6 fields", len(frame0) == 6, f"got {len(frame0)}")
-    check("its limits field is a 2-element list", len(rlp_items(frame0[3])) == 2,
-          f"got {len(rlp_items(frame0[3]))}")
-
-    check("the spec encoding differs from the frozen one", spec_tx.encode() != frozen_tx.encode())
-    check("the sig hash differs from the frozen one", spec_tx.sig_hash() != frozen_tx.sig_hash())
-
-    # The intrinsic dropped 3000 and neither frame carries value, so max_gas is exactly
-    # 3000 below the frozen dialect's for the same transaction. This pins the constant.
-    check("max_gas is 3000 below the frozen dialect (intrinsic 15000 -> 12000)",
-          frozen_tx.total_gas_limit() - spec_tx.total_gas_limit() == 3_000,
-          f"frozen {frozen_tx.total_gas_limit()} vs spec {spec_tx.total_gas_limit()}")
-
-    # A declared state budget must reach max_gas; the frozen dialect has nowhere to put it.
-    stateful = build(sys.modules[__name__], state_limit=97_920)
-    check("a frame's limits.state raises max_gas by exactly that amount",
-          stateful.total_gas_limit() - spec_tx.total_gas_limit() == 97_920,
-          f"delta {stateful.total_gas_limit() - spec_tx.total_gas_limit()}")
-
-    # TX_VALUE_COST is per value-carrying frame.
-    valued = build(sys.modules[__name__])
-    valued.frames[1].value = 1
-    check("a value-carrying frame adds TX_VALUE_COST",
-          valued.total_gas_limit() - spec_tx.total_gas_limit() == 6_000,
-          f"delta {valued.total_gas_limit() - spec_tx.total_gas_limit()}")
-
-    sys.exit(0 if ok else 1)
+    EXPECT_RLP = "f8ae01c1800794000000000000000000000000000000000000abcde8ca01038082520880821122dc0280940000000000000000000000000000000000001234829c408080f85cf85a0194000000000000000000000000000000000000abcd80b8410101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101843b9aca008506fc23ac0080c0c0"
+    EXPECT_SIGHASH = "0x989e6ce4dc87b2afd5cfa6c780ff60f01fc3b40c77057cf872410145d69f715c"
+    EXPECT_TOTAL_GAS = 80_974
+    got_rlp = golden.encode().hex()
+    got_sh = "0x" + golden.sig_hash().hex()
+    print("RLP match:     ", got_rlp == EXPECT_RLP)
+    if got_rlp != EXPECT_RLP:
+        print("  expected:", EXPECT_RLP)
+        print("  got:     ", got_rlp)
+    print("sig_hash match:", got_sh == EXPECT_SIGHASH)
+    if got_sh != EXPECT_SIGHASH:
+        print("  expected:", EXPECT_SIGHASH)
+        print("  got:     ", got_sh)
+    got_gas = golden.total_gas_limit()
+    print("total gas match:", got_gas == EXPECT_TOTAL_GAS)
+    if got_gas != EXPECT_TOTAL_GAS:
+        print("  expected:", EXPECT_TOTAL_GAS)
+        print("  got:     ", got_gas)
+    sys.exit(0 if got_rlp == EXPECT_RLP and got_sh == EXPECT_SIGHASH
+             and got_gas == EXPECT_TOTAL_GAS else 1)

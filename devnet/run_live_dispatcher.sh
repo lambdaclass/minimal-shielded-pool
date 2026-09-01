@@ -12,7 +12,8 @@ RPC=${RPC_URL:?set RPC_URL}
   echo "a production deployment requires a separately verified multi-party zkey" >&2
   exit 1
 }
-python3 ../tooling/check_activation.py ../activation_manifest.testbed.json --allow-testbed
+MANIFEST=../activation_manifest.testbed.json
+python3 ../tooling/check_activation.py "$MANIFEST" --allow-testbed
 
 BN=../contracts
 PRICE=(--gas-price 3000000000 --priority-gas-price 1000000000)
@@ -112,34 +113,52 @@ PY
 echo "==> shield fixture note"
 python3 pool_frametx.py "$RPC" deploy_config.json "$SMOKE_OUTPUT" shield "$DEPLOYER_PK"
 
-echo "==> publish authenticated post-shield root"
-PUB=$(cast send "$POOL" 'publishEpochRoot(uint64)' 0 --rpc-url "$RPC" --private-key "$DEPLOYER_PK" \
-  "${PRICE[@]}" --gas-limit 500000 --json)
-PUB_TX=$(jq -r '.transactionHash' <<<"$PUB")
-# A shallow reorg can re-include the publication in a different consensus
-# slot. Wait for two successors, then re-read the canonical receipt and block
-# by hash. The spend wallet still checks the recent-root storage before signing.
-while :; do
-  PUB=$(cast receipt "$PUB_TX" --rpc-url "$RPC" --json)
-  PUB_BLOCK=$(cast to-dec "$(jq -r '.blockNumber' <<<"$PUB")")
-  HEAD_BLOCK=$(cast block-number --rpc-url "$RPC")
-  (( HEAD_BLOCK >= PUB_BLOCK + 2 )) && break
-  sleep 1
-done
-PUB_HASH=$(jq -r '.blockHash' <<<"$PUB")
-BLOCK=$(cast rpc --rpc-url "$RPC" eth_getBlockByHash "$PUB_HASH" false)
-ROOT_SLOT=$(jq -r '.slotNumber' <<<"$BLOCK")
-[[ $ROOT_SLOT != null && $ROOT_SLOT != "" ]] || { echo "publication block has no slotNumber" >&2; exit 1; }
-ROOT_SLOT_DEC=$(cast to-dec "$ROOT_SLOT")
+# Publish the current tree root and echo the EIP-7843 slot its block landed in. Each
+# spend proof is bound to the root that existed when it was generated, so a spend that
+# changes the tree invalidates the root the next one needs: the transfer and the withdraw
+# are bound to different roots and each needs its own publication.
+publish_root() {
+  local pub pub_tx pub_block head_block pub_hash block slot
+  pub=$(cast send "$POOL" 'publishEpochRoot(uint64)' 0 --rpc-url "$RPC" \
+    --private-key "$DEPLOYER_PK" "${PRICE[@]}" --gas-limit 500000 --json)
+  pub_tx=$(jq -r '.transactionHash' <<<"$pub")
+  # A shallow reorg can re-include the publication in a different consensus slot. Wait
+  # for two successors, then re-read the canonical receipt and block by hash. The spend
+  # wallet still checks the recent-root storage before signing.
+  while :; do
+    pub=$(cast receipt "$pub_tx" --rpc-url "$RPC" --json)
+    pub_block=$(cast to-dec "$(jq -r '.blockNumber' <<<"$pub")")
+    head_block=$(cast block-number --rpc-url "$RPC")
+    (( head_block >= pub_block + 2 )) && break
+    sleep 1
+  done
+  pub_hash=$(jq -r '.blockHash' <<<"$pub")
+  block=$(cast rpc --rpc-url "$RPC" eth_getBlockByHash "$pub_hash" false)
+  slot=$(jq -r '.slotNumber' <<<"$block")
+  [[ $slot != null && $slot != "" ]] || { echo "publication block has no slotNumber" >&2; return 1; }
+  cast to-dec "$slot"
+}
 
-python3 - "$RPC" "$POOL" "$VERIFIER" "$T3" "$T4" "$LOGIC" "$SOURCE0" "$DOMAIN" "$ROOT_SLOT_DEC" <<'PY'
-import json, sys
+echo "==> publish authenticated post-shield root"
+ROOT_SLOT_DEC=$(publish_root) || exit 1
+
+MANIFEST_PATH=$MANIFEST python3 - "$RPC" "$POOL" "$VERIFIER" "$T3" "$T4" "$LOGIC" "$SOURCE0" "$DOMAIN" "$ROOT_SLOT_DEC" <<'PY'
+import json, os, sys
 keys = ["rpc", "pool", "verifier", "poseidonT3", "poseidonT4", "logic",
         "sourceIdEpoch0", "domain", "_slot_transfer"]
 cfg = dict(zip(keys, sys.argv[1:]))
-cfg.update({"chainId": 8141, "profile": "hegota-eip8369-testbed",
-            "verifyGas": 320000, "settleGas": 2000000,
+# The gas figures come from the manifest this deployment was actually gated on, not
+# from literals. A deployment of the updated dispatcher that wrote the frozen profile's
+# 2,000,000 single budget would hand the spend wallet budgets belonging to a contract it
+# is not talking to, and the resulting settlement failures look like proof errors.
+manifest = json.load(open(os.environ["MANIFEST_PATH"]))["profile"]
+cfg.update({"chainId": manifest["chain_id"], "profile": manifest["wire_profile"],
+            "verifyGas": manifest["verify_frame_gas"],
+            "settleGas": manifest["settle_frame_gas"],
             "testbedProvingKey": True})
+if "settle_frame_state_gas" in manifest:
+    cfg["settleStateGas"] = manifest["settle_frame_state_gas"]
+    cfg["verifyStateGas"] = manifest["verify_frame_state_gas"]
 with open("deploy_config.json", "w") as f:
     json.dump(cfg, f, indent=1)
 print("wrote deploy_config.json")
@@ -148,3 +167,45 @@ PY
 echo "==> deployed testbed pool"
 echo "    fixture=$SMOKE_OUTPUT"
 echo "    root slot=$ROOT_SLOT_DEC (EIP-7843 slotNumber, not block timestamp)"
+
+# A deployment that only shields proves the pool can take money, not that it can pay it
+# out. The spends are the half that exercises the proof, the nullifier, the recent-root
+# reference and the settlement frame's gas — the parts a wire-profile change actually
+# threatens — so run them here rather than leaving "fully deployed" to mean "half tested".
+# SPEND=0 skips them for a deployment that is only publishing a pool.
+if [[ ${SPEND:-1} == 1 ]]; then
+  echo "==> transfer (shielded spend, note -> note)"
+  python3 pool_frametx.py "$RPC" deploy_config.json "$SMOKE_OUTPUT" transfer "$DEPLOYER_PK"
+
+  # The transfer inserted two commitments, so the root the withdraw proof was generated
+  # against is the post-transfer one, not the post-shield one already published. Publish
+  # again and record its slot under the key the withdraw reads. Without this a withdraw
+  # after a fresh deployment dies on a missing `_slot_withdraw`, which is why the flow
+  # had only ever been run against a config edited by hand.
+  echo "==> publish authenticated post-transfer root"
+  WITHDRAW_SLOT=$(publish_root) || exit 1
+  python3 - "$WITHDRAW_SLOT" <<'PY'
+import json, sys
+cfg = json.load(open("deploy_config.json"))
+cfg["_slot_withdraw"] = sys.argv[1]
+json.dump(cfg, open("deploy_config.json", "w"), indent=1)
+print(f"    withdraw root slot={sys.argv[1]}")
+PY
+
+  echo "==> withdraw (shielded spend, note -> credit)"
+  python3 pool_frametx.py "$RPC" deploy_config.json "$SMOKE_OUTPUT" withdraw "$DEPLOYER_PK"
+
+  # A withdraw books a credit; it does not push funds. Until the credit is claimed the
+  # recipient's balance is unchanged and the pool still holds the money, so a run that
+  # stops at the withdraw proves the proof verified and nothing about the payout.
+  # 900k rather than a round 200k: the claim measured 216,740 gas here, and at 200,000 it
+  # runs out mid-payout and reverts having consumed the lot.
+  RECIPIENT=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["recipient"])' "$SMOKE_OUTPUT")
+  echo "==> claim (credit -> recipient $RECIPIENT)"
+  cast send "$POOL" 'claimWithdrawal(address)' "$RECIPIENT" --rpc-url "$RPC" \
+    --private-key "$DEPLOYER_PK" "${PRICE[@]}" --gas-limit 900000 >/dev/null
+  PAID=$(cast balance "$RECIPIENT" --rpc-url "$RPC")
+  [[ $PAID != 0 ]] || { echo "claim left the recipient unpaid" >&2; exit 1; }
+  echo "    recipient balance $PAID wei"
+  echo "==> spends settled"
+fi

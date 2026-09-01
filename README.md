@@ -63,10 +63,14 @@ deployment paths.
 
 ## Compatibility target
 
-The active encoder and immutable dispatcher target the wire format deployed by
-ethrex v23 on the Hegotá testnet, chain ID 8141. That network uses an 11-field
-envelope, one gas limit per frame, and the gas schedule recorded in the testbed
-activation manifest.
+The active encoder and immutable dispatcher target EIP-8141, EIP-8250 and
+EIP-8272 as currently specified (ethereum/EIPs `7d1c8bfb94` / `e5cf246ff1` /
+`0231fb05f5`): a nested-fee envelope, per-frame `limits = [execution, state]`,
+and the split gas schedule recorded in the testbed activation manifest. The
+dialect deployed on the pre-relaunch chain-8141 testnet (11-field envelope, one
+gas limit per frame) is archived byte-exact under
+`devnet/vectors/2026-09-01-hegota-final-profile/`, the auditable record of that
+deployment.
 
 The Ethereum EIPs remain drafts. The
 [current EIP-8141 draft](https://eips.ethereum.org/EIPS/eip-8141) has since

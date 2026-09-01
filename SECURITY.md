@@ -13,9 +13,11 @@ rejection, exact two-frame self-payment, and EIP-7843 slot handling. Production
 activation remains blocked on a real ceremony, independent audit, cross-client
 evidence, and fork-specific gas proof.
 
-The active transaction encoder and dispatcher target the ethrex v23 Hegotá
-testnet profile. They do not implement the newer EIP-8141 draft wire format,
-which has nested fees and separate execution and state gas limits. A client
+The active transaction encoder and dispatcher target EIP-8141 as currently
+specified: nested fees and separate execution and state gas limits. The
+pre-relaunch Hegotá testnet profile they previously targeted is archived under
+`devnet/vectors/2026-09-01-hegota-final-profile/` and is not usable against any
+live network. A client
 upgrade to that format requires a new immutable pool profile and deployment.
 
 ## Security model
@@ -66,8 +68,8 @@ dispatcher, logic, and both Poseidon runtimes before the pool is used.
   Keccak collision resistance, and secp256k1 unforgeability.
 - A production multi-party phase-2 ceremony with destroyed contributions and
   independent transcript verification.
-- Correct ethrex v23 implementations of the Hegotá EIP-8141, EIP-8250,
-  EIP-8272, and EIP-7843 profile.
+- Correct ethrex v23 implementations of EIP-8141, EIP-8250, EIP-8272 and
+  EIP-7843 at the pins the activation manifest records.
 - An explicitly supported verification budget of at least 322,800 gas. The
   published EIP-8141 public-mempool value is 100,000 and is insufficient.
 - A fork-scoped proof that 2,000,000 SENDER gas covers all cold-state,

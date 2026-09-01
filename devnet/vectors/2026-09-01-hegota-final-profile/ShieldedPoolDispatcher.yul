@@ -1,12 +1,5 @@
 /// @title ShieldedPoolDispatcher
-/// @notice Immutable EIP-8141 validation shell for the minimal pool, at the
-/// spec's current pins.
-/// @dev The pre-relaunch dispatcher is archived byte-exact under
-/// devnet/vectors/2026-09-01-hegota-final-profile/. The two are not
-/// interchangeable and neither can read the other's transactions: this one nests the
-/// fee fields, gives every frame `limits = [execution, state]`, renumbers three
-/// TXPARAM indices, and moves RECENTROOTREFLOAD to 0xB6. Deploy exactly one, to
-/// match the chain.
+/// @notice Immutable ethrex v23 Hegotá validation shell for the minimal pool.
 /// Runtime tail: implementation address || Groth16 verifier address.
 object "ShieldedPoolDispatcher" {
     code {
@@ -32,9 +25,7 @@ object "ShieldedPoolDispatcher" {
                 value := verbatim_2i_1o(hex"B4", signatureIndex, param)
             }
             function recentRootRef(field, index) -> value {
-                // 0xB6 now: EIP-8141 took 0xB5 for SIGDATACOPY, so EIP-8272's
-                // RECENTROOTREFLOAD moved along (upstream 0231fb05f5).
-                value := verbatim_2i_1o(hex"B6", field, index)
+                value := verbatim_2i_1o(hex"B5", field, index)
             }
             function approveExecutionAndPayment() { verbatim_3i_0o(hex"AA", 0, 0, 3) }
 
@@ -161,9 +152,9 @@ object "ShieldedPoolDispatcher" {
                 if txParam(0x0A) { fail(errShape()) }
                 if iszero(eq(txParam(0x0B), 1)) { fail(errShape()) }
                 if txParam(0x07) { fail(errShape()) }
-                if iszero(eq(txParam(0x0E), 2)) { fail(errKeys()) }
+                if iszero(eq(txParam(0x0D), 2)) { fail(errKeys()) }
                 if txParam(0x01) { fail(errKeys()) }
-                if iszero(eq(txParam(0x11), 1)) { fail(errRoot()) }
+                if iszero(eq(txParam(0x0F), 1)) { fail(errRoot()) }
 
                 // The sole low-s secp256k1 signature is protocol-validated over
                 // the canonical transaction hash. Its signer is proof-selected.
@@ -177,10 +168,6 @@ object "ShieldedPoolDispatcher" {
                 // Frame 0: proof-carrying VERIFY by the pool.
                 if iszero(eq(frameParam(0, 0x00), address())) { fail(errShape()) }
                 if iszero(eq(frameParam(0, 0x01), 320000)) { fail(errShape()) }
-                // The proof frame writes nothing, so it declares no state budget.
-                // Any nonzero value here would be `max_gas` the pool pays for and
-                // cannot use.
-                if frameParam(0, 0x09) { fail(errShape()) }
                 if iszero(eq(frameParam(0, 0x02), 1)) { fail(errShape()) }
                 if iszero(eq(frameParam(0, 0x03), 3)) { fail(errShape()) }
                 if iszero(eq(frameParam(0, 0x04), 256)) { fail(errShape()) }
@@ -188,13 +175,7 @@ object "ShieldedPoolDispatcher" {
 
                 // Frame 1: the single settlement call, with fork-profile gas.
                 if iszero(eq(frameParam(1, 0x00), address())) { fail(errShape()) }
-                if iszero(eq(frameParam(1, 0x01), 1400000)) { fail(errShape()) }
-                // Settlement's state growth is bounded at five new slots
-                // (finalized root, epoch counter, two leaf markers, one withdrawal
-                // credit); 550000 covers 5 * 64 * 1530 with margin. Pinned for the
-                // same reason as the execution budget: unpinned, it is the pool's
-                // money.
-                if iszero(eq(frameParam(1, 0x09), 550000)) { fail(errShape()) }
+                if iszero(eq(frameParam(1, 0x01), 2000000)) { fail(errShape()) }
                 if iszero(eq(frameParam(1, 0x02), 2)) { fail(errShape()) }
                 if frameParam(1, 0x03) { fail(errShape()) }
                 if iszero(eq(frameParam(1, 0x04), 388)) { fail(errShape()) }
@@ -210,7 +191,7 @@ object "ShieldedPoolDispatcher" {
                 mstore(0, 2)
                 mstore(0x20, lo)
                 mstore(0x40, hi)
-                if iszero(eq(txParam(0x0F), keccak256(0, 0x60))) { fail(errKeys()) }
+                if iszero(eq(txParam(0x0E), keccak256(0, 0x60))) { fail(errKeys()) }
 
                 // Bind the exact EIP-8272 tuple, including slot and epoch source.
                 let rootSlot := frameDataLoad(1, 36)
