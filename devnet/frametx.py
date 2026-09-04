@@ -13,8 +13,8 @@ What changed, and why each matters to a signer:
     every signature hash differs;
   * a frame declares `limits = [execution, state]` rather than one gas limit, because the spec
     meters EIP-8037 state gas as a second, separately declared dimension;
-  * the intrinsic drops from 15000 to 12000, and a value-carrying frame adds
-    `TX_VALUE_COST` (6000) apiece;
+  * the intrinsic drops from 15000 to 12000, and a frame that moves value to another
+    account adds `TX_VALUE_COST` (6000) apiece;
   * `standard_gas_limit` includes the declared state budgets, and the calldata-floor branch
     of `max_gas` adds them on top rather than absorbing them.
 
@@ -155,8 +155,10 @@ class FrameTx:
         return sum(4 if b == 0 else 16 for b in encoded)
 
     @staticmethod
-    def _calldata_tokens(encoded: bytes) -> int:
-        return sum(1 if b == 0 else 4 for b in encoded)
+    def _floor_tokens(encoded: bytes) -> int:
+        # EIP-8141 `floor_tokens_in`: the calldata floor prices every byte alike. Only the
+        # standard charge above distinguishes zero bytes from nonzero ones.
+        return 4 * len(encoded)
 
     def _nonce_calldata(self) -> bytes:
         return rlp_list([rlp_int(k) for k in self.nonce_keys]) + rlp_int(self.nonce_seq)
@@ -193,14 +195,20 @@ class FrameTx:
         # The frozen file's 3000/3102 are the same formula on the older schedule.
         return 0 if not self.recent_root_refs else 2_400 + len(self.recent_root_refs) * 2_002
 
+    def _moves_value(self, frame) -> bool:
+        # EIP-8141 `value_cost`: a frame with no target, or one targeting the sender, moves
+        # nothing whatever its `value`, so it is not charged.
+        return (frame.value > 0 and frame.target is not None
+                and addr20(frame.target) != addr20(self.sender))
+
     def value_transfer_cost(self) -> int:
-        """`TX_VALUE_COST` per value-carrying frame (EIP-8141).
+        """`TX_VALUE_COST` per frame that moves value to another account (EIP-8141).
 
         Per frame, not per distinct recipient, and static because `value` and `target` are
         transaction fields. It covers the recipient balance write and the EIP-7708 transfer
         log, exactly as EIP-2780 prices a top-level transfer.
         """
-        return 6_000 * sum(1 for f in self.frames if f.value)
+        return 6_000 * sum(1 for f in self.frames if self._moves_value(f))
 
     def mandatory_gas(self) -> int:
         # The terms `frame_tx_intrinsic_gas` and `calldata_floor_gas` share. A cost that
@@ -221,7 +229,7 @@ class FrameTx:
                 + self.state_gas_limit())
 
     def calldata_floor_gas(self) -> int:
-        tokens = sum(self._calldata_tokens(field) for field in self._data_fields())
+        tokens = sum(self._floor_tokens(field) for field in self._data_fields())
         return self.mandatory_gas() + 16 * tokens
 
     def total_gas_limit(self) -> int:
@@ -273,7 +281,7 @@ class FrameTx:
                     + sum(self._calldata_gas(field) for field in fields)
                     + sum(frame.gas_limit for frame in self.validation_prefix()))
         floor = (self.mandatory_gas()
-                 + 16 * sum(self._calldata_tokens(field) for field in fields))
+                 + 16 * sum(self._floor_tokens(field) for field in fields))
         return max(standard, floor)
 
     def matcha_charge(self, safety_factor=2) -> int:
@@ -373,11 +381,35 @@ if __name__ == "__main__":
           stateful.total_gas_limit() - spec_tx.total_gas_limit() == 97_920,
           f"delta {stateful.total_gas_limit() - spec_tx.total_gas_limit()}")
 
-    # TX_VALUE_COST is per value-carrying frame.
+    # TX_VALUE_COST is per frame that moves value to another account: frame 1 targets 0x1234
+    # from sender 0xABCD.
     valued = build(sys.modules[__name__])
     valued.frames[1].value = 1
-    check("a value-carrying frame adds TX_VALUE_COST",
+    check("a frame moving value to another account adds TX_VALUE_COST",
           valued.total_gas_limit() - spec_tx.total_gas_limit() == 6_000,
           f"delta {valued.total_gas_limit() - spec_tx.total_gas_limit()}")
+    # ...and only then: a targetless frame and a self-targeted frame move nothing.
+    targetless = build(sys.modules[__name__])
+    targetless.frames[0].value = 1
+    check("value on a targetless frame adds nothing",
+          targetless.mandatory_gas() == spec_tx.mandatory_gas(),
+          f"delta {targetless.mandatory_gas() - spec_tx.mandatory_gas()}")
+    self_pay = build(sys.modules[__name__])
+    self_pay.frames[1].target, self_pay.frames[1].value = self_pay.sender, 1
+    check("value to the sender itself adds nothing",
+          self_pay.mandatory_gas() == spec_tx.mandatory_gas(),
+          f"delta {self_pay.mandatory_gas() - spec_tx.mandatory_gas()}")
+
+    # The floor prices zero and nonzero bytes alike; only the standard charge weights them.
+    zeros = build(sys.modules[__name__])
+    zeros.frames[0].data = bytes(64)
+    ones = build(sys.modules[__name__])
+    ones.frames[0].data = bytes([0x01]) * 64
+    check("the calldata floor is the same for 64 zero bytes and 64 nonzero bytes",
+          zeros.calldata_floor_gas() == ones.calldata_floor_gas(),
+          f"{zeros.calldata_floor_gas()} vs {ones.calldata_floor_gas()}")
+    check("the standard charge still weights them 4 vs 16 per byte",
+          ones.standard_gas_limit() - zeros.standard_gas_limit() == 64 * 12,
+          f"delta {ones.standard_gas_limit() - zeros.standard_gas_limit()}")
 
     sys.exit(0 if ok else 1)

@@ -167,12 +167,13 @@ object "ShieldedPoolDispatcher" {
 
                 // The sole low-s secp256k1 signature is protocol-validated over
                 // the canonical transaction hash. Its signer is proof-selected.
+                // Its length is not checked: the protocol fixes it at 65 bytes,
+                // and SIGPARAM exposes len(signature) for ARBITRARY entries only.
                 let authorizer := frameDataLoad(1, 356)
                 if or(iszero(authorizer), shr(160, authorizer)) { fail(errAuthorizer()) }
                 if iszero(eq(sigParam(0, 0), authorizer)) { fail(errAuthorizer()) }
                 if iszero(eq(sigParam(0, 1), 1)) { fail(errAuthorizer()) }
                 if sigParam(0, 2) { fail(errAuthorizer()) }
-                if iszero(eq(sigParam(0, 3), 65)) { fail(errAuthorizer()) }
 
                 // Frame 0: proof-carrying VERIFY by the pool.
                 if iszero(eq(frameParam(0, 0x00), address())) { fail(errShape()) }

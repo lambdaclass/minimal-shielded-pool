@@ -200,12 +200,23 @@ PY
   # stops at the withdraw proves the proof verified and nothing about the payout.
   # 900k rather than a round 200k: the claim measured 216,740 gas here, and at 200,000 it
   # runs out mid-payout and reverts having consumed the lot.
+  #
+  # The payout is judged as a balance delta, not as "nonzero afterwards": the fixture's
+  # recipient is a fixed address, so on a chain that has seen one successful run it is
+  # already funded and a reverted claim would otherwise pass.
   RECIPIENT=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["recipient"])' "$SMOKE_OUTPUT")
-  echo "==> claim (credit -> recipient $RECIPIENT)"
-  cast send "$POOL" 'claimWithdrawal(address)' "$RECIPIENT" --rpc-url "$RPC" \
-    --private-key "$DEPLOYER_PK" "${PRICE[@]}" --gas-limit 900000 >/dev/null
-  PAID=$(cast balance "$RECIPIENT" --rpc-url "$RPC")
-  [[ $PAID != 0 ]] || { echo "claim left the recipient unpaid" >&2; exit 1; }
-  echo "    recipient balance $PAID wei"
+  PUBLIC_AMOUNT=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["withdraw"]["public_amount"])' "$SMOKE_OUTPUT")
+  BEFORE=$(cast balance "$RECIPIENT" --rpc-url "$RPC")
+  echo "==> claim (credit -> recipient $RECIPIENT, expecting +$PUBLIC_AMOUNT wei)"
+  claim=$(cast send "$POOL" 'claimWithdrawal(address)' "$RECIPIENT" --rpc-url "$RPC" \
+    --private-key "$DEPLOYER_PK" "${PRICE[@]}" --gas-limit 900000 --json)
+  [[ $(jq -r '.status' <<<"$claim") == "0x1" ]] || {
+    echo "claim reverted: $(jq -r '.transactionHash' <<<"$claim")" >&2; exit 1; }
+  AFTER=$(cast balance "$RECIPIENT" --rpc-url "$RPC")
+  # Balances outgrow bash's 64-bit arithmetic after a few ETH, so subtract in python.
+  PAID=$(python3 -c 'import sys; print(int(sys.argv[1]) - int(sys.argv[2]))' "$AFTER" "$BEFORE")
+  [[ $PAID == "$PUBLIC_AMOUNT" ]] || {
+    echo "claim paid $PAID wei to the recipient, expected $PUBLIC_AMOUNT" >&2; exit 1; }
+  echo "    recipient +$PAID wei ($BEFORE -> $AFTER)"
   echo "==> spends settled"
 fi

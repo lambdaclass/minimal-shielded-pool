@@ -27,9 +27,9 @@
     "circuits/spend.circom": "3d100fbf47852a50ee7fc5bf4fa2e8735e072f2c96533b9cb028168ccb6a78ea",
     "contracts/src/Groth16Verifier.sol": "9667eab74b1efdd0a6cc5c419e6dbe4b7cb78ad29b5ed8ecf3b3d40886b286ac",
     "contracts/src/ShieldedPoolLogic.sol": "7c05d484877146222ff1250e625ecb1d819c7aa409091a1affc41443f762cd5b",
-    "devnet/ShieldedPoolDispatcher.yul": "3ad7b1e6db47289d57127bd90c7d69f628f51ce1e15f68ce2487fca17a60d621",
-    "devnet/build/shielded_pool_dispatcher_init.hex": "730c44a886fa283e15ca849e0289f242e819a0cbd1a378c9e8f6ba0e41d08f90",
-    "devnet/frametx.py": "ba18d26569e15790b8df30de80207e499b46ba7539ee6227c57340fec683231e",
+    "devnet/ShieldedPoolDispatcher.yul": "55d4dc352bbe3652060068ea5b37af4f4f55bfbeea1654296812252cdf74eee3",
+    "devnet/build/shielded_pool_dispatcher_init.hex": "d5d07e722eab13f97e632a2a0dc876a95c8c6df2706e7f3d1de84c0d9f7ad2a8",
+    "devnet/frametx.py": "a26e35ef0205b205c98f9d9c27241990e7c15b6d7ade69c66a21008303d922db",
     "tooling/check_gas_profile.py": "a231afbaa17b58924dab202b0ecf4655ad1d73bb742eecab5816f35de636a12e"
   }
 }
