@@ -43,8 +43,15 @@ PRE_PR_12279_KEYED_NONCE_EXECUTION_GAS = 2 * 20_000
 # from the pre-12279 figure is the keyed-nonce first use leaving the execution
 # dimension for the state one, which is the whole point of that PR.
 POST_PR_12279_MAX_OBSERVED_VERIFY_EXECUTION_GAS = 254_712
-# The recent-root verifier frame over one tuple, from the same runs. Sixteen tuples
-# measured 12,044, so the pinned 30,000 covers the largest frame the spec allows.
+# The pool grammar permits exactly one 72-byte recent-root tuple, pinned by the
+# dispatcher's `frameParam(0, 0x04) == 72`. The measured verifier-frame execution cost
+# for that shape was 5,579 gas, so the pinned 30,000-gas limit covers it.
+#
+# This figure says nothing about a frame carrying the sixteen tuples EIP-8272 allows.
+# An earlier revision claimed it did, on a measurement that repeated ONE tuple sixteen
+# times: identical (source_id, slot) pairs share a storage key, so that run paid one
+# cold SLOAD and fifteen warm ones. Sixteen distinct roots are sixteen cold SLOADs,
+# 33,600 gas before the rest of the verifier runs, which does not fit 30,000 at all.
 MAX_OBSERVED_RECENT_ROOT_FRAME_GAS = 5_579
 CONSERVATIVE_VERIFY_STATE_BOUND = (
     SPEND_NONCE_KEY_COUNT * KEYED_NONCE_FIRST_USE_STATE_GAS

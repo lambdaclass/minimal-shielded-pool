@@ -128,20 +128,20 @@ reviewed artifact set rather than routine dependency maintenance.
 
 | Dependency | Status |
 |---|---|
-| Ethrex v23 Hegotá FrameTx ABI | Implemented and tested live |
-| Current EIP-8141 wire format | Implemented by the active encoder and supported by the current chain 8141 testnet |
-| EIP-8141 published 100k public mempool budget | Not compatible: the proof frame and signature need 322.8k execution gas |
+| Ethrex v23 Hegotá FrameTx ABI | Implemented, and the whole lifecycle mined on a devnet at these pins |
+| Current EIP-8141 wire format | Implemented by the active encoder and tested on a private three-node devnet |
+| EIP-8141 published 100k public mempool budget | Not compatible: the two validation frames and the signature need 352.8k execution gas |
 | EIP-8250 keyed nonces | The pool follows PR 12279: two fresh keys cost `195,840` state gas in the proof frame |
 | EIP-8272 recent roots | The pool follows `824cbc0b0e`: the root travels in the canonical verifier frame that leads the transaction |
 | EIP-7843 slot number | Implemented: wallet requires the RPC `slotNumber` field |
-| EIP-8369 | The open draft does not set a final per-transaction budget; the Hegotá testnet currently admits this 322.8k profile |
-| Current ethrex privacy testnet | The chain relaunched on September 3 runs the older EIP-8250 gas rule and the envelope form of EIP-8272; this profile needs the chain's next re-genesis (ethrex branch `hegota-upgrade`) |
+| EIP-8369 | The open draft does not set a final per-transaction budget; the devnet used for this profile admits the 352.8k budget |
+| Current ethrex privacy testnet | The live chain runs the older EIP-8250 gas rule and the envelope form of EIP-8272, so it cannot decode these transactions; this profile needs the chain's next re-genesis |
 
 Earlier testnet evidence is in
 [`devnet/vectors/2026-08-14-tight-gas-profile.md`](devnet/vectors/2026-08-14-tight-gas-profile.md).
 The published EIP-8141 100k policy remains a portability blocker. The pool must
-use a network profile that explicitly admits its 322.8k validation budget. The
-current Hegotá testnet does. [EIP-8369](https://github.com/ethereum/EIPs/pull/12110)
+use a network profile that explicitly admits its 352.8k validation budget, which
+the live chain does not yet. [EIP-8369](https://github.com/ethereum/EIPs/pull/12110)
 is still an open Informational proposal; its `2^20` per-IL value is a benchmark
 candidate, not a finalized per-transaction consensus limit.
 

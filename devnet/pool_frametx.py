@@ -121,6 +121,32 @@ def _keccak(b):
     return keccak(b)
 
 
+def recent_root_window_error(slot, latest_slot, epoch=0):
+    """Why the node would refuse this publication slot, or None if it would accept.
+
+    Kept apart from the RPC so the boundary is testable without a chain, and stated
+    once so the wallet and the node cannot drift.
+
+    EIP-8272 public mempool handling judges a transaction against the earliest block
+    that could carry it, so `current_slot` is the head slot PLUS ONE. Comparing
+    against the head slot directly is one slot too generous: at a protocol age of
+    exactly `RECENT_ROOT_USABLE_WINDOW + 1` the node computes an age one higher and
+    refuses, while a head-relative test still passes and signs a doomed transaction.
+    """
+    current_slot = latest_slot + 1
+    if slot >= current_slot:
+        return (f"  recent-root ref is not yet referenceable: publication slot {slot} is not "
+                f"earlier than current slot {current_slot}. A root written in slot S is only "
+                f"usable from S+1 on; wait one slot and re-sign.")
+    if current_slot - slot >= RECENT_ROOT_LENGTH:
+        return (f"  recent-root ref expired: publication slot {slot} is outside the "
+                f"{RECENT_ROOT_LENGTH}-slot window at current slot {current_slot}. If the tree "
+                f"has not changed since the proof's root, call publishEpochRoot({epoch}), read "
+                f"that block's slotNumber, and re-sign with --root-slot set to that consensus "
+                f"slot.")
+    return None
+
+
 def recent_root_tuple(url, cfg, e):
     """Pack and locally verify the exact EIP-8272 tuple the verifier frame carries:
     `source_id(32) || uint64_be(slot) || root(32)`.
@@ -138,13 +164,9 @@ def recent_root_tuple(url, cfg, e):
     head = rpc(url, "eth_getBlockByNumber", ["latest", False])
     if "slotNumber" not in head:
         raise SystemExit("latest block has no EIP-7843 slotNumber; refusing timestamp derivation")
-    now_slot = int(head["slotNumber"], 16)
-    if now_slot - slot >= RECENT_ROOT_LENGTH:
-        raise SystemExit(
-            f"  recent-root ref expired: publication slot {slot} is outside the "
-            f"{RECENT_ROOT_LENGTH}-slot window at current slot {now_slot}. If the tree has not "
-            f"changed since the proof's root, call publishEpochRoot({epoch}), read that block's "
-            f"slotNumber, and re-sign with --root-slot set to that consensus slot.")
+    problem = recent_root_window_error(slot, int(head["slotNumber"], 16), epoch)
+    if problem:
+        raise SystemExit(problem)
 
     # Self-check: the committed entry the protocol will validate against must
     # already exist for this (source_id, slot, root). One definition, shared
