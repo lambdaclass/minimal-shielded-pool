@@ -6,16 +6,19 @@
     "label": "single-party disposable testbed"
   },
   "profile": {
-    "wire_profile": "eip8250-state-gas-pre-8272-frame",
-    "eip_8250_merge": "94f5a3e3c146c28625d9ab2f8a7c0a848530a13a",
-    "eip_8272_carrier": "legacy-envelope-pending-follow-up",
+    "wire_profile": "eip8272-canonical-frame",
+    "eip_8250_merge": "f3079a09e8c606afcb0e5e1a309ff228b88dc067",
+    "eip_8272_carrier": "canonical-verifier-frame",
+    "eip_8272_pin": "824cbc0b0e",
     "chain_id": 8141,
+    "recent_root_frame_gas": 30000,
     "verify_frame_gas": 320000,
     "verify_frame_state_gas": 195840,
     "signature_gas": 2800,
-    "required_verify_budget": 322800,
+    "required_verify_budget": 352800,
     "pre_pr_12279_max_observed_verify_execution_gas": 294401,
-    "post_pr_12279_max_observed_verify_execution_gas": null,
+    "post_pr_12279_max_observed_verify_execution_gas": 254712,
+    "max_observed_recent_root_frame_gas": 5579,
     "eip_8141_public_mempool_budget": 100000,
     "hegota_profile_2_budget": 1048576,
     "settle_frame_gas": 1400000,
@@ -30,11 +33,11 @@
     "circuits/spend.circom": "3d100fbf47852a50ee7fc5bf4fa2e8735e072f2c96533b9cb028168ccb6a78ea",
     "contracts/src/Groth16Verifier.sol": "9667eab74b1efdd0a6cc5c419e6dbe4b7cb78ad29b5ed8ecf3b3d40886b286ac",
     "contracts/src/ShieldedPoolLogic.sol": "7c05d484877146222ff1250e625ecb1d819c7aa409091a1affc41443f762cd5b",
-    "devnet/ShieldedPoolDispatcher.yul": "e7ef2a5c2fd592e0d818bc8a1046ba495397d450390552e3c52dbc540d5dd467",
-    "devnet/build/shielded_pool_dispatcher_init.hex": "bbf586f501f25d7bbf968e5343cd24caa15854aa0d45a8e6f246a22e59248014",
-    "devnet/frametx.py": "a26e35ef0205b205c98f9d9c27241990e7c15b6d7ade69c66a21008303d922db",
-    "devnet/gas_profile.py": "a4f6f4ab4f7c5d72f131792f0658c40b2c882720106dcf97a4e0c5378f4f140f",
-    "devnet/pool_frametx.py": "0975ccb1ba51c130afbbcb18885844afc9469f22de30bc08ab6d5a2cfb7df4c7",
-    "tooling/check_gas_profile.py": "616bd702839e8d26ad4f9c61fa2cf6aff5483a317f6b92dc4262c9c5478193e4"
+    "devnet/ShieldedPoolDispatcher.yul": "76a992ec44236fede8842602fc4596cfce2f5c756eba7b83e9e14459054c79eb",
+    "devnet/build/shielded_pool_dispatcher_init.hex": "51f2bd0aba29cc5930b29396d78e7721856981344f8c76d0bb0c9dc3db36f5cf",
+    "devnet/frametx.py": "7b59186456e52c9956028cc1ccded61a7ae08684382c8b4f478416cd31bb17c7",
+    "devnet/gas_profile.py": "6c08a105153dea85e3f111e4415cf2f53b43f471e0b87994bdf87d87e507ba19",
+    "devnet/pool_frametx.py": "477df5b8e5b253709b0a1e80c3566014cf3473860faf80a024a654974a660359",
+    "tooling/check_gas_profile.py": "f1bdf58b96e58a98c5959dbb959e0041bb87099b71a2a50e3f9af8e340cebaef"
   }
 }

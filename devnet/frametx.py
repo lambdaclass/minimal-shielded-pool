@@ -9,8 +9,9 @@ dispatcher, and gas profile is archived byte-exact under
 
 What changed, and why each matters to a signer:
 
-  * the fee fields nest into one `fees` list, taking the envelope from 11 fields to 9, so
-    every signature hash differs;
+  * the fee fields nest into one `fees` list, and EIP-8272 (824cbc0b0e) drops its
+    envelope field, taking the envelope from 11 fields to 8, so every signature hash
+    differs; recent roots now travel in a canonical VERIFY frame to 0x…8272;
   * a frame declares `limits = [execution, state]` rather than one gas limit, because the spec
     meters EIP-8037 state gas as a second, separately declared dimension;
   * the intrinsic drops from 15000 to 12000, and a frame that moves value to another
@@ -20,7 +21,7 @@ What changed, and why each matters to a signer:
 
 Wire layout:
   raw = 0x06 || rlp([chain_id, nonce_keys, nonce_seq, sender, frames, signatures,
-                     fees, blob_hashes, recent_root_references])
+                     fees, blob_hashes])
   fees      = rlp([max_priority_fee, max_fee, max_blob_fee])
   frame     = rlp([mode, flags, target_or_empty, [execution, state], value, data])
   signature = rlp([scheme, signer, msg, signature_bytes])  # 0=ARBITRARY, 1=SECP256K1, 2=P256
@@ -119,12 +120,11 @@ class FrameSig:
 
 class FrameTx:
     def __init__(self, chain_id, nonce_keys, nonce_seq, sender, frames, signatures,
-                 max_priority_fee, max_fee, max_blob_fee=0, blob_hashes=None, recent_root_refs=None):
+                 max_priority_fee, max_fee, max_blob_fee=0, blob_hashes=None):
         self.chain_id, self.nonce_keys, self.nonce_seq, self.sender = chain_id, nonce_keys, nonce_seq, sender
         self.frames, self.signatures = frames, signatures
         self.max_priority_fee, self.max_fee, self.max_blob_fee = max_priority_fee, max_fee, max_blob_fee
         self.blob_hashes = blob_hashes or []
-        self.recent_root_refs = recent_root_refs or []
     def _envelope(self, elide_sigs, field_overrides=None):
         field_overrides = field_overrides or {}
         return [
@@ -141,7 +141,6 @@ class FrameTx:
                       rlp_int(self.max_fee),
                       rlp_int(self.max_blob_fee)]),
             rlp_list([rlp_bytes(h) for h in self.blob_hashes]),
-            rlp_list([r for r in self.recent_root_refs]),  # entries pre-encoded if any
         ]
     def encode(self) -> bytes:
         return rlp_list(self._envelope(elide_sigs=False))
@@ -173,8 +172,6 @@ class FrameTx:
             yield ("signature_message", i), sig.msg
             yield ("signature", i), sig.signature
         yield ("nonce", 0), self._nonce_calldata()
-        if self.recent_root_refs:
-            yield ("recent_roots", 0), rlp_list(self.recent_root_refs)
 
     def _data_fields(self):
         for name, data in self._named_data_fields():
@@ -187,13 +184,6 @@ class FrameTx:
             FrameSig.P256: 6_700,
         }
         return sum(costs[s.scheme] for s in self.signatures)
-
-    def recent_root_reference_intrinsic_gas(self) -> int:
-        # EIP-8272 defines these BY FORMULA over the EIP-8038 access-list constants, so they
-        # follow the schedule rather than being fixed: on the v8.1.0 schedule this branch
-        # carries, one address at 2400 plus 1900 + 2*30 + 7*6 = 2002 per referenced key.
-        # The frozen file's 3000/3102 are the same formula on the older schedule.
-        return 0 if not self.recent_root_refs else 2_400 + len(self.recent_root_refs) * 2_002
 
     def _moves_value(self, frame) -> bool:
         # EIP-8141 `value_cost`: a frame with no target, or one targeting the sender, moves
@@ -216,8 +206,7 @@ class FrameTx:
         # dropped whenever the floor binds.
         return (12_000 + len(self.frames) * 475
                 + self.signature_verification_cost()
-                + self.value_transfer_cost()
-                + self.recent_root_reference_intrinsic_gas())
+                + self.value_transfer_cost())
 
     def state_gas_limit(self) -> int:
         return sum(f.state_limit for f in self.frames)
@@ -354,10 +343,11 @@ if __name__ == "__main__":
         print(f"  {'PASS' if cond else 'FAIL'}  {name}{(' — ' + detail) if detail else ''}")
         ok = ok and cond
 
-    # 9 top-level fields, not 11: the three fee scalars became one list.
+    # 8 top-level fields, not 11: the three fee scalars became one list, and EIP-8272's
+    # reference list left the envelope for a canonical verifier frame.
     body = spec_tx.encode()
     fields = rlp_items(body)
-    check("the envelope has 9 top-level fields", len(fields) == 9, f"got {len(fields)}")
+    check("the envelope has 8 top-level fields", len(fields) == 8, f"got {len(fields)}")
     check("field 6 is the nested fees list", len(rlp_items(fields[6])) == 3,
           f"got {len(rlp_items(fields[6]))} entries")
     # Each frame carries [execution, state] where the frozen dialect carried one scalar.

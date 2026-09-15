@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "devnet"))
 
 from gas_profile import (  # noqa: E402
+    RECENT_ROOT_FRAME_GAS,
     SETTLE_FRAME_GAS,
     SETTLE_FRAME_STATE_GAS,
     VERIFY_FRAME_GAS,
@@ -42,6 +43,16 @@ PROFILES = {
         "settle_frame_state_gas": 550_000,
     },
     "eip8250-state-gas-pre-8272-frame": {
+        "verify_frame_gas": 320_000,
+        "signature_gas": 2_800,
+        "verify_frame_state_gas": 195_840,
+        "settle_frame_gas": 1_400_000,
+        "settle_frame_state_gas": 550_000,
+    },
+    # EIP-8272 at 824cbc0b0e: the recent root travels in a canonical verifier frame that
+    # leads the transaction and counts toward the verify budget.
+    "eip8272-canonical-frame": {
+        "recent_root_frame_gas": RECENT_ROOT_FRAME_GAS,
         "verify_frame_gas": VERIFY_FRAME_GAS,
         "signature_gas": 2_800,
         "verify_frame_state_gas": VERIFY_FRAME_STATE_GAS,
@@ -72,19 +83,23 @@ def main():
             raise SystemExit(f"artifact hash mismatch: {rel}\nexpected {expected}\nactual   {actual}")
 
     profile = manifest["profile"]
-    required = profile["verify_frame_gas"] + profile["signature_gas"]
-    if required != profile["required_verify_budget"]:
-        raise SystemExit("required verify budget is inconsistent")
     expected = PROFILES.get(profile["wire_profile"])
     if expected is None:
         raise SystemExit(f"unsupported transaction wire profile: {profile['wire_profile']!r}")
+    # A profile with a recent-root verifier frame budgets it in the prefix.
+    recent_root_gas = profile.get("recent_root_frame_gas", 0)
+    if recent_root_gas != expected.get("recent_root_frame_gas", 0):
+        raise SystemExit("recent-root frame gas does not match the immutable dispatcher profile")
+    required = recent_root_gas + profile["verify_frame_gas"] + profile["signature_gas"]
+    if required != profile["required_verify_budget"]:
+        raise SystemExit("required verify budget is inconsistent")
     if profile["verify_frame_gas"] != expected["verify_frame_gas"]:
         raise SystemExit("VERIFY execution gas does not match the immutable dispatcher profile")
     if profile["signature_gas"] != expected["signature_gas"]:
         raise SystemExit("signature gas does not match the immutable dispatcher profile")
     if required > profile["hegota_profile_2_budget"]:
         raise SystemExit("transaction exceeds the configured Hegota Profile 2 budget")
-    if profile["wire_profile"] == "eip8250-state-gas-pre-8272-frame":
+    if profile["wire_profile"] in ("eip8250-state-gas-pre-8272-frame", "eip8272-canonical-frame"):
         historical_verify_gas = profile["pre_pr_12279_max_observed_verify_execution_gas"]
         # The field is required even before a measurement exists. Its explicit
         # null records the remaining live-test gap; omitting it must not look

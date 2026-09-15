@@ -24,7 +24,11 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "devnet"))
 
 from gas_profile import (  # noqa: E402
+    HEGOTA_TESTNET_MAX_VERIFY_GAS,
     KEYED_NONCE_FIRST_USE_STATE_GAS,
+    MAX_VERIFY_STATE_GAS,
+    RECENT_ROOT_FRAME_GAS,
+    REQUIRED_VERIFY_BUDGET,
     SETTLE_FRAME_GAS,
     SETTLE_FRAME_STATE_GAS,
     SPEND_NONCE_KEY_COUNT,
@@ -34,6 +38,21 @@ from gas_profile import (  # noqa: E402
 
 PRE_PR_12279_MAX_OBSERVED_VERIFY_EXECUTION_GAS = 294_401
 PRE_PR_12279_KEYED_NONCE_EXECUTION_GAS = 2 * 20_000
+# Measured on a devnet running EIP-8250 at f3079a09e8 and EIP-8272 at 824cbc0b0e:
+# the transfer's proof frame reported 254,685 and the withdraw's 254,712. The drop
+# from the pre-12279 figure is the keyed-nonce first use leaving the execution
+# dimension for the state one, which is the whole point of that PR.
+POST_PR_12279_MAX_OBSERVED_VERIFY_EXECUTION_GAS = 254_712
+# The pool grammar permits exactly one 72-byte recent-root tuple, pinned by the
+# dispatcher's `frameParam(0, 0x04) == 72`. The measured verifier-frame execution cost
+# for that shape was 5,579 gas, so the pinned 30,000-gas limit covers it.
+#
+# This figure says nothing about a frame carrying the sixteen tuples EIP-8272 allows.
+# An earlier revision claimed it did, on a measurement that repeated ONE tuple sixteen
+# times: identical (source_id, slot) pairs share a storage key, so that run paid one
+# cold SLOAD and fifteen warm ones. Sixteen distinct roots are sixteen cold SLOADs,
+# 33,600 gas before the rest of the verifier runs, which does not fit 30,000 at all.
+MAX_OBSERVED_RECENT_ROOT_FRAME_GAS = 5_579
 CONSERVATIVE_VERIFY_STATE_BOUND = (
     SPEND_NONCE_KEY_COUNT * KEYED_NONCE_FIRST_USE_STATE_GAS
 )
@@ -65,11 +84,22 @@ def main():
     # that charged 40,000 keyed nonce gas as execution. No PR 12279 node exists
     # yet, so there is no post-change execution measurement.
     assert PRE_PR_12279_MAX_OBSERVED_VERIFY_EXECUTION_GAS < VERIFY_FRAME_GAS
+    # The measured figures must fit the budgets the dispatcher pins, or a spend that
+    # simulates fine halts mid-frame on a chain with slightly different access costs.
+    assert POST_PR_12279_MAX_OBSERVED_VERIFY_EXECUTION_GAS < VERIFY_FRAME_GAS
+    assert MAX_OBSERVED_RECENT_ROOT_FRAME_GAS < RECENT_ROOT_FRAME_GAS
     assert CONSERVATIVE_SETTLEMENT_EXECUTION_BOUND < SETTLE_FRAME_GAS
     assert CONSERVATIVE_SETTLEMENT_STATE_BOUND < SETTLE_FRAME_STATE_GAS
     # The proof itself writes nothing. This exact budget exists only because its
     # payment APPROVE creates the two EIP-8250 keyed-nonce slots.
     assert VERIFY_FRAME_STATE_GAS == CONSERVATIVE_VERIFY_STATE_BOUND
+    # EIP-8272: the recent-root verifier frame joins the public mempool's verify budget
+    # and the prefix's state budgets stay under EIP-8141's MAX_VERIFY_STATE_GAS. One
+    # tuple costs the predeploy's cold entry plus two keccaks and a cold SLOAD, well
+    # under the pinned frame budget.
+    assert REQUIRED_VERIFY_BUDGET == RECENT_ROOT_FRAME_GAS + VERIFY_FRAME_GAS + 2_800
+    assert REQUIRED_VERIFY_BUDGET <= HEGOTA_TESTNET_MAX_VERIFY_GAS
+    assert VERIFY_FRAME_STATE_GAS <= MAX_VERIFY_STATE_GAS
 
     declared_split = (VERIFY_FRAME_GAS + VERIFY_FRAME_STATE_GAS
                    + SETTLE_FRAME_GAS + SETTLE_FRAME_STATE_GAS)
@@ -81,14 +111,15 @@ def main():
     assert extra_over_frozen == 145_840
     assert extra_over_frozen == CONSERVATIVE_VERIFY_STATE_BOUND - pre_pr_12279_saving
 
-    # The dispatcher must enforce the same four limits the wallet emits. Yul
+    # The dispatcher must enforce the same five limits the wallet emits. Yul
     # cannot import the Python module, so check its unavoidable literals here.
     dispatcher = (ROOT / "devnet" / "ShieldedPoolDispatcher.yul").read_text()
     dispatcher_pins = (
-        f"if iszero(eq(frameParam(0, 0x01), {VERIFY_FRAME_GAS})) {{ fail(errShape()) }}",
-        f"if iszero(eq(frameParam(0, 0x09), {VERIFY_FRAME_STATE_GAS})) {{ fail(errShape()) }}",
-        f"if iszero(eq(frameParam(1, 0x01), {SETTLE_FRAME_GAS})) {{ fail(errShape()) }}",
-        f"if iszero(eq(frameParam(1, 0x09), {SETTLE_FRAME_STATE_GAS})) {{ fail(errShape()) }}",
+        f"if iszero(eq(frameParam(0, 0x01), {RECENT_ROOT_FRAME_GAS})) {{ fail(errShape()) }}",
+        f"if iszero(eq(frameParam(1, 0x01), {VERIFY_FRAME_GAS})) {{ fail(errShape()) }}",
+        f"if iszero(eq(frameParam(1, 0x09), {VERIFY_FRAME_STATE_GAS})) {{ fail(errShape()) }}",
+        f"if iszero(eq(frameParam(2, 0x01), {SETTLE_FRAME_GAS})) {{ fail(errShape()) }}",
+        f"if iszero(eq(frameParam(2, 0x09), {SETTLE_FRAME_STATE_GAS})) {{ fail(errShape()) }}",
     )
     assert all(pin in dispatcher for pin in dispatcher_pins), \
         "dispatcher gas limits differ from devnet/gas_profile.py"
@@ -96,7 +127,8 @@ def main():
     # Keep the checked-in deployment record aligned as well. The live runner
     # rewrites these fields from the activation manifest after deployment.
     cfg = json.loads((ROOT / "devnet" / "deploy_config.json").read_text())
-    assert cfg["profile"] == "eip8250-state-gas-pre-8272-frame"
+    assert cfg["profile"] == "eip8272-canonical-frame"
+    assert cfg["recentRootGas"] == RECENT_ROOT_FRAME_GAS
     assert cfg["verifyGas"] == VERIFY_FRAME_GAS
     assert cfg["verifyStateGas"] == VERIFY_FRAME_STATE_GAS
     assert cfg["settleGas"] == SETTLE_FRAME_GAS
@@ -108,8 +140,12 @@ def main():
             "state_cap": VERIFY_FRAME_STATE_GAS,
             "pre_pr_12279_observed_execution": PRE_PR_12279_MAX_OBSERVED_VERIFY_EXECUTION_GAS,
             "pre_pr_12279_keyed_nonce_execution_gas": PRE_PR_12279_KEYED_NONCE_EXECUTION_GAS,
-            "post_pr_12279_observed_execution": None,
+            "post_pr_12279_observed_execution": POST_PR_12279_MAX_OBSERVED_VERIFY_EXECUTION_GAS,
             "keyed_nonce_state_bound": CONSERVATIVE_VERIFY_STATE_BOUND,
+        },
+        "recent_root": {
+            "execution_cap": RECENT_ROOT_FRAME_GAS,
+            "observed_execution_one_tuple": MAX_OBSERVED_RECENT_ROOT_FRAME_GAS,
         },
         "settlement": {
             "execution_cap": SETTLE_FRAME_GAS,

@@ -7,8 +7,10 @@ from pathlib import Path
 from eth_hash.auto import keccak
 from eth_keys import keys
 
-from frametx import Frame, FrameSig, FrameTx, rlp_bytes, rlp_int, rlp_list
+from frametx import Frame, FrameSig, FrameTx
 from pool_frametx import (
+    RECENT_ROOT_ADDRESS,
+    RECENT_ROOT_FRAME_GAS,
     SETTLE_FRAME_GAS,
     SETTLE_FRAME_STATE_GAS,
     SPEND_TUPLE,
@@ -23,8 +25,8 @@ HERE = Path(__file__).parent
 FIXTURE = HERE.parent / "wallet" / "smoke_fixture.json"
 
 
-def root_ref(source, slot, root):
-    return rlp_list([rlp_bytes(source), rlp_int(slot), rlp_bytes(root)])
+def root_tuple(source, slot, root):
+    return source + slot.to_bytes(8, "big") + root
 
 
 def build():
@@ -44,6 +46,8 @@ def build():
         nonce_seq=0,
         sender=pool,
         frames=[
+            Frame(1, 0, int(RECENT_ROOT_ADDRESS, 16), RECENT_ROOT_FRAME_GAS, 0,
+                  root_tuple(source, 1, root)),
             Frame(1, 3, pool, VERIFY_FRAME_GAS, 0, proof_bytes(entry),
                   state_limit=VERIFY_FRAME_STATE_GAS),
             Frame(2, 0, pool, SETTLE_FRAME_GAS, 0, settle,
@@ -52,7 +56,6 @@ def build():
         signatures=[FrameSig(FrameSig.SECP256K1, authorizer, b"", b"")],
         max_priority_fee=1,
         max_fee=10,
-        recent_root_refs=[root_ref(source, 1, root)],
     )
     sig = pk.sign_msg_hash(tx.sig_hash())
     encoded = bytes([sig.v]) + sig.r.to_bytes(32, "big") + sig.s.to_bytes(32, "big")
@@ -76,26 +79,26 @@ def main():
     add("nonce_key", lambda x: x.nonce_keys.__setitem__(0, x.nonce_keys[0] ^ 1))
     add("nonce_seq", lambda x: setattr(x, "nonce_seq", 1))
     add("sender", lambda x: setattr(x, "sender", x.sender ^ 1))
-    add("verify_mode", lambda x: setattr(x.frames[0], "mode", 0))
-    add("verify_flags", lambda x: setattr(x.frames[0], "flags", 2))
-    add("verify_target", lambda x: setattr(x.frames[0], "target", x.frames[0].target ^ 1))
-    add("verify_gas", lambda x: setattr(x.frames[0], "gas_limit", VERIFY_FRAME_GAS - 1))
+    add("verify_mode", lambda x: setattr(x.frames[1], "mode", 0))
+    add("verify_flags", lambda x: setattr(x.frames[1], "flags", 2))
+    add("verify_target", lambda x: setattr(x.frames[1], "target", x.frames[1].target ^ 1))
+    add("verify_gas", lambda x: setattr(x.frames[1], "gas_limit", VERIFY_FRAME_GAS - 1))
     add("verify_state_gas", lambda x: setattr(
-        x.frames[0], "state_limit", VERIFY_FRAME_STATE_GAS - 1))
-    add("verify_value", lambda x: setattr(x.frames[0], "value", 1))
+        x.frames[1], "state_limit", VERIFY_FRAME_STATE_GAS - 1))
+    add("verify_value", lambda x: setattr(x.frames[1], "value", 1))
     for word in range(8):
         add(f"proof_word_{word}", lambda x, w=word: setattr(
-            x.frames[0], "data", x.frames[0].data[:w * 32] +
-            bytes([x.frames[0].data[w * 32] ^ 1]) + x.frames[0].data[w * 32 + 1:]))
-    add("settle_mode", lambda x: setattr(x.frames[1], "mode", 1))
-    add("settle_target", lambda x: setattr(x.frames[1], "target", x.frames[1].target ^ 1))
-    add("settle_gas", lambda x: setattr(x.frames[1], "gas_limit", SETTLE_FRAME_GAS - 1))
+            x.frames[1], "data", x.frames[1].data[:w * 32] +
+            bytes([x.frames[1].data[w * 32] ^ 1]) + x.frames[1].data[w * 32 + 1:]))
+    add("settle_mode", lambda x: setattr(x.frames[2], "mode", 1))
+    add("settle_target", lambda x: setattr(x.frames[2], "target", x.frames[2].target ^ 1))
+    add("settle_gas", lambda x: setattr(x.frames[2], "gas_limit", SETTLE_FRAME_GAS - 1))
     add("settle_state_gas", lambda x: setattr(
-        x.frames[1], "state_limit", SETTLE_FRAME_STATE_GAS - 1))
+        x.frames[2], "state_limit", SETTLE_FRAME_STATE_GAS - 1))
     for word in range(12):
         add(f"settle_word_{word}", lambda x, w=word: setattr(
-            x.frames[1], "data", x.frames[1].data[:4 + w * 32] +
-            bytes([x.frames[1].data[4 + w * 32] ^ 1]) + x.frames[1].data[5 + w * 32:]))
+            x.frames[2], "data", x.frames[2].data[:4 + w * 32] +
+            bytes([x.frames[2].data[4 + w * 32] ^ 1]) + x.frames[2].data[5 + w * 32:]))
     add("signature_scheme", lambda x: setattr(x.signatures[0], "scheme", 2))
     add("signature_signer", lambda x: setattr(x.signatures[0], "signer", x.signatures[0].signer ^ 1))
     add("signature_message", lambda x: setattr(x.signatures[0], "msg", b"\x01" * 32))
@@ -103,9 +106,14 @@ def main():
     add("max_fee", lambda x: setattr(x, "max_fee", 11))
     add("blob_fee", lambda x: setattr(x, "max_blob_fee", 1))
     add("blob_hashes", lambda x: x.blob_hashes.append(b"\x01" * 32))
-    add("root_source", lambda x: x.recent_root_refs.__setitem__(0, root_ref(b"\x01" * 32, 1, b"\x02" * 32)))
-    add("root_slot", lambda x: x.recent_root_refs.__setitem__(0, root_ref(b"\x01" * 32, 2, b"\x02" * 32)))
-    add("root_value", lambda x: x.recent_root_refs.__setitem__(0, root_ref(b"\x01" * 32, 1, b"\x03" * 32)))
+    # The EIP-8272 tuple is frame 0's data; the frame's own shape is bound too.
+    add("root_source", lambda x: setattr(x.frames[0], "data", root_tuple(b"\x01" * 32, 1, b"\x02" * 32)))
+    add("root_slot", lambda x: setattr(x.frames[0], "data", root_tuple(b"\x01" * 32, 2, b"\x02" * 32)))
+    add("root_value", lambda x: setattr(x.frames[0], "data", root_tuple(b"\x01" * 32, 1, b"\x03" * 32)))
+    add("root_frame_target", lambda x: setattr(x.frames[0], "target", x.frames[0].target ^ 1))
+    add("root_frame_flags", lambda x: setattr(x.frames[0], "flags", 1))
+    add("root_frame_gas", lambda x: setattr(x.frames[0], "gas_limit", RECENT_ROOT_FRAME_GAS - 1))
+    add("root_frame_state_gas", lambda x: setattr(x.frames[0], "state_limit", 1))
 
     for name, candidate in mutations:
         assert candidate.sig_hash() != original_hash, f"signature hash did not bind {name}"

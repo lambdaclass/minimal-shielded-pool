@@ -159,6 +159,13 @@ cfg.update({"chainId": manifest["chain_id"], "profile": manifest["wire_profile"]
 if "settle_frame_state_gas" in manifest:
     cfg["settleStateGas"] = manifest["settle_frame_state_gas"]
     cfg["verifyStateGas"] = manifest["verify_frame_state_gas"]
+# The recent-root verifier frame's budget belongs here for the same reason as the
+# other four: this file is the deployment record, and `tooling/check_gas_profile.py`
+# reads it back. Omitting it left every live deployment with a config the checker
+# then died on with a bare KeyError, which reads as a broken checker rather than an
+# incomplete record.
+if "recent_root_frame_gas" in manifest:
+    cfg["recentRootGas"] = manifest["recent_root_frame_gas"]
 with open("deploy_config.json", "w") as f:
     json.dump(cfg, f, indent=1)
 print("wrote deploy_config.json")

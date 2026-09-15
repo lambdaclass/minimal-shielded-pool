@@ -29,9 +29,9 @@ sponsorship or caller-selected fee recipient.
 The circuit selects a fresh nonzero secp256k1 authorizer. EIP-8141 validates
 its canonical low-s signature over the complete FrameTx hash. The dispatcher
 requires that recovered signer through `SIGPARAM`, one signature, one exact
-two-frame grammar, the complete two-key EIP-8250 nonce set, and the exact
-EIP-8272 reference. A copied or rerandomized proof cannot be rewrapped without
-the one-time private key.
+three-frame grammar, the complete two-key EIP-8250 nonce set, and the exact
+EIP-8272 tuple proven by the leading recent-root verifier frame. A copied or
+rerandomized proof cannot be rewrapped without the one-time private key.
 
 Payment approval consumes the EIP-8250 keys before SENDER settlement. Safety
 therefore requires settlement to be total for every proof-valid admitted
@@ -70,11 +70,15 @@ dispatcher, logic, and both Poseidon runtimes before the pool is used.
   independent transcript verification.
 - Correct ethrex v23 implementations of EIP-8141, EIP-8250, EIP-8272 and
   EIP-7843 at the pins the activation manifest records.
-- An explicitly supported verification budget of at least 322,800 gas. The
-  published EIP-8141 public-mempool value is 100,000 and is insufficient.
-- A fork-scoped proof that 2,000,000 SENDER gas covers all cold-state,
-  rollover, credit, proxy, and static-call paths. Unsupported repricing forks
-  require a new immutable profile.
+- An explicitly supported verification budget of at least 352,800 gas: the
+  recent-root verifier frame's 30,000, the proof frame's 320,000, and 2,800 for
+  the signature. The published EIP-8141 public-mempool value is 100,000 and is
+  insufficient.
+- A fork-scoped proof that the settlement limits cover all cold-state, rollover,
+  credit, proxy, and static-call paths. The current profile declares 1,400,000
+  execution gas and 550,000 state gas, replacing the single 2,000,000-gas budget
+  that predates EIP-8037's second dimension. Unsupported repricing forks require
+  a new immutable profile.
 - Independent circuit, Solidity, Yul, wallet, and deployment review.
 
 EIP-8369 remains an open Informational proposal. Its current `2^20` per-IL

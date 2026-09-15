@@ -5,8 +5,9 @@
 /// devnet/vectors/2026-09-01-hegota-final-profile/. The two are not
 /// interchangeable and neither can read the other's transactions: this one nests the
 /// fee fields, gives every frame `limits = [execution, state]`, renumbers three
-/// TXPARAM indices, and moves RECENTROOTREFLOAD to 0xB6. Deploy exactly one, to
-/// match the chain.
+/// TXPARAM indices, and takes the recent root from EIP-8272's canonical verifier
+/// frame (824cbc0b0e) instead of an envelope field. Deploy exactly one, to match the
+/// chain.
 /// Runtime tail: implementation address || Groth16 verifier address.
 object "ShieldedPoolDispatcher" {
     code {
@@ -31,11 +32,7 @@ object "ShieldedPoolDispatcher" {
             function sigParam(signatureIndex, param) -> value {
                 value := verbatim_2i_1o(hex"B4", signatureIndex, param)
             }
-            function recentRootRef(field, index) -> value {
-                // 0xB6 now: EIP-8141 took 0xB5 for SIGDATACOPY, so EIP-8272's
-                // RECENTROOTREFLOAD moved along (upstream 0231fb05f5).
-                value := verbatim_2i_1o(hex"B6", field, index)
-            }
+            function recentRootAddress() -> a { a := 0x0000000000000000000000000000000000008272 }
             function approveExecutionAndPayment() { verbatim_3i_0o(hex"AA", 0, 0, 3) }
 
             function fail(sel) {
@@ -155,56 +152,69 @@ object "ShieldedPoolDispatcher" {
             }
 
             function verifyFrameApprove() {
-                // One immutable two-frame, self-paying grammar.
+                // One immutable three-frame, self-paying grammar: the EIP-8272
+                // verifier frame, this proof frame, the settlement.
                 if iszero(eq(txParam(0x02), address())) { fail(errShape()) }
-                if iszero(eq(txParam(0x09), 2)) { fail(errShape()) }
-                if txParam(0x0A) { fail(errShape()) }
+                if iszero(eq(txParam(0x09), 3)) { fail(errShape()) }
+                if iszero(eq(txParam(0x0A), 1)) { fail(errShape()) }
                 if iszero(eq(txParam(0x0B), 1)) { fail(errShape()) }
                 if txParam(0x07) { fail(errShape()) }
                 if iszero(eq(txParam(0x0E), 2)) { fail(errKeys()) }
                 if txParam(0x01) { fail(errKeys()) }
-                if iszero(eq(txParam(0x11), 1)) { fail(errRoot()) }
+
+                // Frame 0: EIP-8272's canonical recent-root verifier, exactly as the
+                // spec identifies a completed one: resolved target, mode, flags,
+                // state budget, one tuple's worth of data, and status success. The
+                // protocol ran RECENT_ROOT_CODE over the tuple before this frame.
+                if iszero(eq(frameParam(0, 0x00), recentRootAddress())) { fail(errRoot()) }
+                if iszero(eq(frameParam(0, 0x01), 30000)) { fail(errShape()) }
+                if iszero(eq(frameParam(0, 0x02), 1)) { fail(errRoot()) }
+                if frameParam(0, 0x03) { fail(errRoot()) }
+                if iszero(eq(frameParam(0, 0x04), 72)) { fail(errRoot()) }
+                if iszero(eq(frameParam(0, 0x05), 1)) { fail(errRoot()) }
+                if frameParam(0, 0x08) { fail(errRoot()) }
+                if frameParam(0, 0x09) { fail(errRoot()) }
 
                 // The sole low-s secp256k1 signature is protocol-validated over
                 // the canonical transaction hash. Its signer is proof-selected.
                 // Its length is not checked: the protocol fixes it at 65 bytes,
                 // and SIGPARAM exposes len(signature) for ARBITRARY entries only.
-                let authorizer := frameDataLoad(1, 356)
+                let authorizer := frameDataLoad(2, 356)
                 if or(iszero(authorizer), shr(160, authorizer)) { fail(errAuthorizer()) }
                 if iszero(eq(sigParam(0, 0), authorizer)) { fail(errAuthorizer()) }
                 if iszero(eq(sigParam(0, 1), 1)) { fail(errAuthorizer()) }
                 if sigParam(0, 2) { fail(errAuthorizer()) }
 
-                // Frame 0: proof-carrying VERIFY by the pool.
-                if iszero(eq(frameParam(0, 0x00), address())) { fail(errShape()) }
-                if iszero(eq(frameParam(0, 0x01), 320000)) { fail(errShape()) }
+                // Frame 1: proof-carrying VERIFY by the pool.
+                if iszero(eq(frameParam(1, 0x00), address())) { fail(errShape()) }
+                if iszero(eq(frameParam(1, 0x01), 320000)) { fail(errShape()) }
                 // This profile pins EIP-8037 CPSB to 1530. EIP-8250 charges
                 // 64 * CPSB when payment approval creates a keyed nonce slot.
                 // Every spend creates two slots, so the total is 195840.
-                if iszero(eq(frameParam(0, 0x09), 195840)) { fail(errShape()) }
-                if iszero(eq(frameParam(0, 0x02), 1)) { fail(errShape()) }
-                if iszero(eq(frameParam(0, 0x03), 3)) { fail(errShape()) }
-                if iszero(eq(frameParam(0, 0x04), 256)) { fail(errShape()) }
-                if frameParam(0, 0x08) { fail(errShape()) }
+                if iszero(eq(frameParam(1, 0x09), 195840)) { fail(errShape()) }
+                if iszero(eq(frameParam(1, 0x02), 1)) { fail(errShape()) }
+                if iszero(eq(frameParam(1, 0x03), 3)) { fail(errShape()) }
+                if iszero(eq(frameParam(1, 0x04), 256)) { fail(errShape()) }
+                if frameParam(1, 0x08) { fail(errShape()) }
 
-                // Frame 1: the single settlement call, with fork-profile gas.
-                if iszero(eq(frameParam(1, 0x00), address())) { fail(errShape()) }
-                if iszero(eq(frameParam(1, 0x01), 1400000)) { fail(errShape()) }
+                // Frame 2: the single settlement call, with fork-profile gas.
+                if iszero(eq(frameParam(2, 0x00), address())) { fail(errShape()) }
+                if iszero(eq(frameParam(2, 0x01), 1400000)) { fail(errShape()) }
                 // Settlement's state growth is bounded at five new slots
                 // (finalized root, epoch counter, two leaf markers, one withdrawal
                 // credit); 550000 covers 5 * 64 * 1530 with margin. Pinned for the
                 // same reason as the execution budget: unpinned, it is the pool's
                 // money.
-                if iszero(eq(frameParam(1, 0x09), 550000)) { fail(errShape()) }
-                if iszero(eq(frameParam(1, 0x02), 2)) { fail(errShape()) }
-                if frameParam(1, 0x03) { fail(errShape()) }
-                if iszero(eq(frameParam(1, 0x04), 388)) { fail(errShape()) }
-                if frameParam(1, 0x08) { fail(errShape()) }
-                if iszero(eq(shr(224, frameDataLoad(1, 0)), 0x921fcac7)) { fail(errShape()) }
+                if iszero(eq(frameParam(2, 0x09), 550000)) { fail(errShape()) }
+                if iszero(eq(frameParam(2, 0x02), 2)) { fail(errShape()) }
+                if frameParam(2, 0x03) { fail(errShape()) }
+                if iszero(eq(frameParam(2, 0x04), 388)) { fail(errShape()) }
+                if frameParam(2, 0x08) { fail(errShape()) }
+                if iszero(eq(shr(224, frameDataLoad(2, 0)), 0x921fcac7)) { fail(errShape()) }
 
                 // The consumed EIP-8250 key set is exactly the two nullifiers.
-                let nf1 := frameDataLoad(1, 132)
-                let nf2 := frameDataLoad(1, 164)
+                let nf1 := frameDataLoad(2, 132)
+                let nf2 := frameDataLoad(2, 164)
                 let lo := nf1
                 let hi := nf2
                 if gt(lo, hi) { lo := nf2 hi := nf1 }
@@ -213,16 +223,18 @@ object "ShieldedPoolDispatcher" {
                 mstore(0x40, hi)
                 if iszero(eq(txParam(0x0F), keccak256(0, 0x60))) { fail(errKeys()) }
 
-                // Bind the exact EIP-8272 tuple, including slot and epoch source.
-                let rootSlot := frameDataLoad(1, 36)
-                let epoch := frameDataLoad(1, 68)
+                // Bind the exact EIP-8272 tuple the verifier frame proved, including
+                // slot and epoch source: source_id at 0, uint64_be(slot) at 32, root
+                // at 40 of the frame's 72 data bytes.
+                let rootSlot := frameDataLoad(2, 36)
+                let epoch := frameDataLoad(2, 68)
                 if or(shr(64, rootSlot), shr(64, epoch)) { fail(errCanonical()) }
-                if iszero(eq(recentRootRef(0, 0), sourceId(epoch))) { fail(errRoot()) }
-                if iszero(eq(recentRootRef(1, 0), rootSlot)) { fail(errRoot()) }
-                if iszero(eq(recentRootRef(2, 0), frameDataLoad(1, 4))) { fail(errRoot()) }
+                if iszero(eq(frameDataLoad(0, 0), sourceId(epoch))) { fail(errRoot()) }
+                if iszero(eq(shr(192, frameDataLoad(0, 32)), rootSlot)) { fail(errRoot()) }
+                if iszero(eq(frameDataLoad(0, 40), frameDataLoad(2, 4))) { fail(errRoot()) }
 
-                verifyProof(1)
-                if lt(frameDataLoad(1, 292), txParam(0x06)) { fail(errFee()) }
+                verifyProof(2)
+                if lt(frameDataLoad(2, 292), txParam(0x06)) { fail(errFee()) }
                 approveExecutionAndPayment()
             }
 

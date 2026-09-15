@@ -50,14 +50,26 @@ def solc_binary() -> str:
             SOLC_VERSION / f"solc-{SOLC_VERSION}"),
         str(Path.home() / ".svm" / SOLC_VERSION / f"solc-{SOLC_VERSION}"),
     ]
-    for candidate in candidates:
-        if candidate and Path(candidate).is_file():
-            version = subprocess.run([candidate, "--version"], capture_output=True,
-                                     text=True, check=True).stdout
-            if f"Version: {SOLC_VERSION}" not in version:
-                raise SystemExit(f"expected solc {SOLC_VERSION}, got: {version.strip()}")
+    # The list is a fallback chain, so a candidate of the wrong version is skipped
+    # rather than fatal. Only an explicit SOLC is an error when it mismatches, because
+    # naming a binary by hand and getting a different compiler is a mistake worth
+    # reporting. Otherwise any `solc` on PATH -- the one a package manager or a shim
+    # happens to expose -- would hide the pinned install two entries below it, and the
+    # committed initcode can only be reproduced by the pinned compiler.
+    seen = []
+    for index, candidate in enumerate(candidates):
+        if not candidate or not Path(candidate).is_file():
+            continue
+        version = subprocess.run([candidate, "--version"], capture_output=True,
+                                 text=True, check=True).stdout
+        if f"Version: {SOLC_VERSION}" in version:
             return candidate
-    raise SystemExit(f"solc {SOLC_VERSION} not found; set SOLC to the pinned binary")
+        summary = version.strip().splitlines()[-1]
+        if index == 0:
+            raise SystemExit(f"SOLC={candidate} is not solc {SOLC_VERSION}: {summary}")
+        seen.append(f"{candidate} ({summary})")
+    detail = ("; rejected " + ", ".join(seen)) if seen else ""
+    raise SystemExit(f"solc {SOLC_VERSION} not found{detail}; set SOLC to the pinned binary")
 
 
 
