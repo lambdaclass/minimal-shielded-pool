@@ -17,8 +17,13 @@ two transfers under the keys `transfer` (A) and a second entry the harness
 reads directly. Both carry the same recent-root reference (R at R's slot).
 
 Run from wallet/: python3 gen_nonce_race.py --chain-id=N --pool-address=0x...
-                   --root-slot=N [--epoch=N]
-                   [--output=PATH]
+                   [--root-slot=N] [--epoch=N] [--random]
+                   [--rpc=URL --pool=0x...] [--output=PATH]
+
+`--root-slot` is recorded for the reader only; `pool_frametx.py --root-slot N` is what
+binds a spend to the slot the root was published in, which is only known after the two
+shields land. `--random` draws fresh note secrets instead of the fixed seed, so a second
+fixture against the same pool does not recreate notes whose nullifiers are already spent.
 """
 import json
 import sys
@@ -84,8 +89,11 @@ def main():
     rpc_url = None
     pool = None
     output_path = HERE / "nonce_race_fixture.json"
+    seeded = True
     for arg in sys.argv[1:]:
-        if arg.startswith("--chain-id="):
+        if arg == "--random":
+            seeded = False
+        elif arg.startswith("--chain-id="):
             chain_id = int(arg.split("=", 1)[1], 0)
         elif arg.startswith("--pool-address="):
             pool_address = arg.split("=", 1)[1]
@@ -101,12 +109,13 @@ def main():
             pool = arg.split("=", 1)[1]
         elif arg.startswith("--output="):
             output_path = Path(arg.split("=", 1)[1]).expanduser().resolve()
-    if pool_address is None or root_slot is None:
-        raise SystemExit("--pool-address=0x... and --root-slot=N are required")
+    if pool_address is None:
+        raise SystemExit("--pool-address=0x... is required")
     if (rpc_url is None) != (pool is None):
         raise SystemExit("--rpc= and --pool= must be given together (seed the live tree)")
     WORK.mkdir(exist_ok=True)
-    w.set_seed(20260712)
+    if seeded:
+        w.set_seed(20260712)
     domain = w.domain_scalar(chain_id, pool_address)
 
     # Two deposits, into one tree. Root R is fixed after both inserts. Against a

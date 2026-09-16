@@ -135,7 +135,8 @@ reviewed artifact set rather than routine dependency maintenance.
 | EIP-8272 recent roots | The pool follows `824cbc0b0e`: the root travels in the canonical verifier frame that leads the transaction |
 | EIP-7843 slot number | Implemented: wallet requires the RPC `slotNumber` field |
 | EIP-8369 | The open draft does not set a final per-transaction budget; the devnet used for this profile admits the 352.8k budget |
-| Current ethrex privacy testnet | The live chain runs the older EIP-8250 gas rule and the envelope form of EIP-8272, so it cannot decode these transactions; this profile needs the chain's next re-genesis |
+| Current ethrex privacy testnet | The chain relaunched on 2026-09-14 on this profile; the whole lifecycle mined on it |
+| MATCHA (ethrex mempool capacity) | Compatible: spends clear the structural EIP-8250 test, so the pool can hold several pending spends once it has earned width; the wallet rides out the refusal a fresh pool gets, see below |
 
 Earlier testnet evidence is in
 [`devnet/vectors/2026-08-14-tight-gas-profile.md`](devnet/vectors/2026-08-14-tight-gas-profile.md).
@@ -144,6 +145,26 @@ use a network profile that explicitly admits its 352.8k validation budget, which
 the live chain does not yet. [EIP-8369](https://github.com/ethereum/EIPs/pull/12110)
 is still an open Informational proposal; its `2^20` per-IL value is a benchmark
 candidate, not a finalized per-transaction consensus limit.
+
+### Several spends in flight
+
+ethrex admits a sender's first pending frame transaction for free and charges every
+additional one against width the sender earned from the gas its own frame transactions
+used in finalized blocks (MATCHA, `docs/matcha.md` in ethrex). Two things follow for a
+pool that relays spends for many users.
+
+The pool qualifies. A spend's keyed nonces are its own two nullifiers, its sender is the
+pool contract, and its validation prefix reads no pool storage (the root comes from the
+EIP-8272 verifier frame, the proof from the transaction), so ethrex's structural test
+allows a second pending spend alongside the first. Width is the only remaining gate.
+
+A fresh pool has none. Until its first spend finalizes it holds one pending spend, and a
+second is refused with `sender has 0 MATCHA width, needs N for an additional frame
+transaction`. `devnet/pool_frametx.py --wait-width S` rides that out: the refusal clears
+when the pending spend mines, and from then on each finalized spend of about 1.6M gas buys
+about three more pending spends at the 3/2 charge, up to the node's cap. `--no-wait`
+returns at submission so a second spend can be sent while the first is pending, and
+`devnet/run_concurrent_spends.sh` runs both regimes against a deployed pool.
 
 ## Production gates
 
