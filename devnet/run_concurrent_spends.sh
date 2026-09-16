@@ -10,8 +10,9 @@
 # deployed pool:
 #
 #   phase "fresh"   two notes shielded, one root published, transfer A submitted and, with
-#                   no wait, transfer C. On a pool with no earned width C is refused with
-#                   the node's figures, the wallet retries, and C is admitted once A mines.
+#                   no wait, transfer C. On a pool with no earned width the simulation says
+#                   C would be refused, with the charge; the wallet holds it on the ledger
+#                   and sends once A mines.
 #   phase "earned"  (EARNED=1) once the fresh spends are finalized, the same again with two
 #                   new notes. C is admitted while A is still pending and the two usually
 #                   share a block.
@@ -53,6 +54,18 @@ wait_finalized_past() {
 
 submitted_hash() { grep -oE 'submitted: 0x[0-9a-f]{64}' <<<"$1" | awk '{print $2}'; }
 
+# The pool's MATCHA ledger on this node, one line, or a note when the node predates the
+# endpoint. Read before each pair and after, so the log shows what the wallet decided from.
+ledger() {
+  local view
+  view=$(cast rpc --rpc-url "$RPC" ethrex_matchaWidth "$POOL" 2>/dev/null) \
+    || { echo "    ledger: ethrex_matchaWidth unavailable"; return; }
+  python3 -c 'import json, sys
+v = json.loads(sys.argv[1]); c = v.get("lastCreditedBlock")
+w, p, cap = int(v["width"], 16), v["pendingFrameTxs"], int(v["widthCap"], 16)
+print(f"    ledger: width={w:,} pending={p} lastCredited={int(c, 16) if c else None} cap={cap:,}")' "$view"
+}
+
 LAST_BLOCK=0
 phase() {
   local label=$1
@@ -67,11 +80,13 @@ phase() {
   local slot; slot=$(publish_root)
   echo "    root slot=$slot"
 
+  ledger
   echo "==> [$label] transfer A, submitted without waiting"
   local out_a; out_a=$(python3 pool_frametx.py "$RPC" deploy_config.json "$fixture" transfer \
       "$DEPLOYER_PK" --spend-key transfer --root-slot "$slot" --no-wait)
   sed 's/^/    /' <<<"$out_a"
-  echo "==> [$label] transfer C, back to back, riding out a MATCHA refusal for up to 300s"
+  ledger
+  echo "==> [$label] transfer C, back to back, held on the ledger for up to 300s if it does not fit"
   local out_c; out_c=$(python3 pool_frametx.py "$RPC" deploy_config.json "$fixture" transfer \
       "$DEPLOYER_PK" --spend-key transfer_c --root-slot "$slot" --no-wait --wait-width 300)
   sed 's/^/    /' <<<"$out_c"
@@ -79,11 +94,12 @@ phase() {
   local block_a block_c
   block_a=$(wait_mined "$(submitted_hash "$out_a")")
   block_c=$(wait_mined "$(submitted_hash "$out_c")")
-  if grep -q "MATCHA: refused" <<<"$out_c"; then
-    echo "    [$label] C refused while A was pending, admitted after A mined: A block $block_a, C block $block_c"
+  if grep -qE "MATCHA: (refused|charge .* refuse now)" <<<"$out_c"; then
+    echo "    [$label] C did not fit while A was pending, sent once it did: A block $block_a, C block $block_c"
   else
-    echo "    [$label] C admitted at first try: A block $block_a, C block $block_c"
+    echo "    [$label] C fit at first look: A block $block_a, C block $block_c"
   fi
+  ledger
   LAST_BLOCK=$(( block_a > block_c ? block_a : block_c ))
 }
 

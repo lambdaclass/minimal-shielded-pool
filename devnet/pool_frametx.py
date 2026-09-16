@@ -27,7 +27,9 @@ Spend signing keys come from the fixture's proof-bound
 
 `--no-wait` returns after submission instead of waiting for the receipt, which is
 how a second spend gets submitted while the first is still pending. `--wait-width S`
-rides out ethrex's MATCHA refusal of an additional pending spend for up to S seconds
+holds an additional pending spend for up to S seconds until ethrex's MATCHA ledger says
+it fits: the simulation reports `matchaCharge` and `matchaAdmissible`, the wallet polls
+`ethrex_matchaWidth` (see `wait_for_matcha`), and the refusal on send is the fallback
 (see `send_raw`).
 """
 import json
@@ -88,6 +90,48 @@ def simulate(url, raw):
             return None
         raise SystemExit(f"  simulate RPC error: {r['error']}")
     return r["result"]
+
+
+def matcha_width(url, sender):
+    """This node's MATCHA ledger for `sender` via ethrex_matchaWidth, or None when the
+    endpoint does not expose it (-32601)."""
+    req = urllib.request.Request(
+        url, headers={"content-type": "application/json"},
+        data=json.dumps({"jsonrpc": "2.0", "id": 1, "method": "ethrex_matchaWidth",
+                         "params": ["0x" + sender.to_bytes(20, "big").hex()]}).encode())
+    r = json.loads(urllib.request.urlopen(req, timeout=20).read())
+    if "error" in r:
+        if r["error"].get("code") == -32601:
+            return None
+        raise SystemExit(f"  ethrex_matchaWidth error: {r['error']}")
+    return r["result"]
+
+
+def wait_for_matcha(url, sender, sim, wait_width):
+    """Hold a spend the simulation says admission would refuse until the ledger says
+    otherwise, for up to `wait_width` seconds.
+
+    `matchaAdmissible` false means the sender has a spend pending and cannot pay
+    `matchaCharge` for another. It clears when that spend mines (pendingFrameTxs drops
+    to zero and the next one is the free baseline) or when finality credits width. Polls
+    ethrex_matchaWidth every two seconds rather than re-simulating, since the ledger is
+    what changes. Returns without sending when the deadline passes; the refusal path in
+    `send_raw` remains the authority for the race between this look and the send."""
+    charge = int(sim["matchaCharge"], 16)
+    print(f"  MATCHA: charge {charge:,} width; admission would refuse now: {sim.get('matchaRefusal')}")
+    if wait_width <= 0:
+        raise SystemExit("  MATCHA: not sending; pass --wait-width S to hold the spend until it fits")
+    deadline = time.monotonic() + wait_width
+    while time.monotonic() < deadline:
+        time.sleep(2)
+        view = matcha_width(url, sender)
+        if view is None:
+            return  # no ledger endpoint after all; let send_raw ride out the refusal
+        width, pending = int(view["width"], 16), view["pendingFrameTxs"]
+        if pending == 0 or width >= charge:
+            print(f"  MATCHA: fits now (width {width:,}, pending {pending}); sending")
+            return
+    raise SystemExit(f"  MATCHA: still does not fit after {wait_width}s; not sending")
 
 
 def cast_calldata(sig, *args):
@@ -332,6 +376,10 @@ def build_and_send(url, pk, pool, value, calldata, protocol_nonces=None, proof_v
         # burns the notes (nullifiers consumed, outputs never inserted). For
         # spends the generous default stays; the payer's worst case is
         # prepaying more gas, refunded on success.
+        if sim.get("matchaAdmissible") is False:
+            wait_for_matcha(url, sender, sim, wait_width)
+        elif sim.get("matchaCharge"):
+            print(f"  MATCHA: charge {int(sim['matchaCharge'], 16):,} width, admissible now")
         used = hexint((sim.get("frames") or [{}])[-1].get("gasUsed"))
         if used is not None and not protocol_nonces:
             sized = used + used // 4  # measured + 25% for state-gas variance at a later block

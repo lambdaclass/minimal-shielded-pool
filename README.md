@@ -160,11 +160,15 @@ allows a second pending spend alongside the first. Width is the only remaining g
 
 A fresh pool has none. Until its first spend finalizes it holds one pending spend, and a
 second is refused with `sender has 0 MATCHA width, needs N for an additional frame
-transaction`. `devnet/pool_frametx.py --wait-width S` rides that out: the refusal clears
-when the pending spend mines, and from then on each finalized spend of about 1.6M gas buys
-about three more pending spends at the 3/2 charge, up to the node's cap. `--no-wait`
-returns at submission so a second spend can be sent while the first is pending, and
-`devnet/run_concurrent_spends.sh` runs both regimes against a deployed pool.
+transaction`. The wallet does not have to find that out by being refused: the simulation it
+runs before every send reports `matchaCharge` and `matchaAdmissible`, and
+`ethrex_matchaWidth(pool)` reads the ledger, so `devnet/pool_frametx.py --wait-width S`
+holds a spend that does not fit until the pending one mines or finality credits width. From
+then on each finalized spend of about 1.6M gas buys about three more pending spends at the
+3/2 charge, up to the node's cap. `--no-wait` returns at submission so a second spend can
+be sent while the first is pending, and `devnet/run_concurrent_spends.sh` runs both regimes
+against a deployed pool, printing the ledger before each pair. Older nodes without the
+endpoints still work: the refusal on send is parsed and retried.
 
 ## Production gates
 
